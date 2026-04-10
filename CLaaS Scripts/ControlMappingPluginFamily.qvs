@@ -1,0 +1,68 @@
+//***************************************************************************************************************************************************
+// Author: Art Clomera
+// Date: 06/20/2022
+// Company: IPKeys Technologies, LLC
+// Function: Nessus 
+//***************************************************************************************************************************************************
+// Load Nessus Plugin Family  mapping to Security Control as Reference information:
+PluginFamilyTable:
+Mapping Load * Inline 
+[pluginFamily, Control
+AIX Local Security Checks, SI-2
+Amazon Linux Local Security Checks, SI-2
+CentOS Local Security Checks, SI-2
+Databases, SI-2
+Fedora Local Security Checks, SI-2
+Debian Local Security Checks, SI-2
+F5 Networks Local Security Checks, SI-2
+FreeBSD Local Security Checks, SI-2
+General, SI-2
+Gentoo Local Security Checks, SI-2
+HP-UX Local Security Checks, SI-2
+Huawei Local Security Checks, SI-2
+Junos Local Security Checks, SI-2
+MacOS X Local Security Checks, SI-2
+Mandriva Local Security Checks, SI-2
+Misc, SI-2
+Oracle Linux Local Security Checks, SI-2
+PhotonOS Local Security Checks, SI-2
+Red Hat Local Security Checks, SI-2
+OracleVM Local Security Checks, SI-2
+Palo Alto Local Security Checks, SI-2
+Scientific Linux Local Security Checks, SI-2
+Slackware Local Security Checks, SI-2
+Solaris Local Security Checks, SI-2
+SuSE Local Security Checks, SI-2
+Ubuntu Local Security Checks, SI-2
+VMware ESX Local Security Checks, SI-2
+SuSE Local Security Checks, SI-2
+Ubuntu Local Security Checks, SI-2
+VMware ESX Local Security Checks, SI-2
+Virtuozzo Local Security Checks, SI-2
+Windows : Microsoft Bulletins, SI-2
+Gain a shell remotely, SI-3
+Backdoors, SI-5
+Brute force attacks, SI-5
+Denial of Service, SI-5
+SC-38, Peer-To-Peer File Sharing, SC-38
+CGI abuses, CM-6
+CGI abuses : XSS, CM-6
+CISCO, CM-6
+DNS, CM-6
+FTP, CM-6
+Firewalls, CM-6
+Mobile Devices, CM-6
+Netware, CM-6
+Port scanners, CM-6
+RPC, CM-6
+SCADA, CM-6
+SMTP problems, CM-6
+SNMP, CM-6
+Settings, CM-6
+Web Servers, CM-6
+Windows, CM-6
+Service detection, CM-7
+Policy Compliance, CA-2
+Default Unix Accounts, AC-2
+Windows : User management, AC-2
+ ];

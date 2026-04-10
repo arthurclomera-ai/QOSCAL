@@ -1,0 +1,228 @@
+//***************************************************************************************************************************************************
+// Author: Art Clomera
+// Date: 11/14/2025
+// Company: Art Clomera Consulting
+// Function: Inspector Load Script for .csv files within Customer>Project>Reports/DAST.../Inspector/ directory
+//***************************************************************************************************************************************************
+Sub Inspector (vProject)
+//Don't even bother with the rest of this section if there are no Inspector files
+if $(vNumberOfNewInspectorFiles)>0 then
+
+let vDataTableName=LOOKUP('QVDTableName','FileType','Inspector','QVDFilesRouter');
+trace ******************* vDataTableName: $(vDataTableName) ******************;
+trace ******************* FileType: $(FileType) ******************;
+trace ******************* QVDFilesRouter: $(QVDFilesRouter) ******************;
+
+let vSourceFileField=LOOKUP('SourceNameField','FileType','Inspector','QVDFilesRouter'); //e.g. 'File_Ckl'
+
+//***************************************************************************************************************************************************
+// Loop through each Inspector file
+//***************************************************************************************************************************************************
+
+trace Inspector;
+
+//Create a table of just the Nessus FileTypes from the QVDFilesRouter
+
+FromBRouter:
+NoConcatenate Load
+Designation,
+SuffixClause
+Resident GlobalFromBStatements
+Where FileType='Inspector';
+ 
+        
+//Build the the FROM statement appropriate for the file source. 
+//FROM statements comprise two parts, desgnated by vFROMA and vFROMB.
+  //vFROMA refers either to the local connection path or the SharePoint connector.  This doesn't change. (As long as all local files sourced in this section are in the same directory.) 
+  //vFROMB comprises the second part of the FROM statement that includes file types, etc.  This can change for each LOAD statement in this section:
+    //Therefore, multiple vFROMB variables are created and numbered sequentially (e.g. vFROMB01, vFROMB02...vFROMBNN)
+//The string 'SuffixClause' here is just a place holder
+if $(vSourceSwitch)=0 then
+trace Inspector vSourceSwitch = 0 *******************;
+//Local source
+  Let vNoOfFiles = '$(vNumberOfNewInspectorFiles)'; 
+
+elseif $(vSourceSwitch)=1 then
+trace Inspector vSourceSwitch = 1*******************;
+//SharePoint source
+  set vFileList=''$(vInspectorfilenames);
+  let vNoOfFiles=0;
+  for Each file in $(vFileList)     //vFileList already contains filenames as filename.ext
+    if LEN('$(file)')>0 AND LEN(Lookup('$(vSourceFileField)','$(vSourceFileField)','$(file)','$(vDataTableName)_UniqueSource'))=0 then    
+      let vNoOfFiles=$(vNoOfFiles)+1;
+    end if
+  next file
+else
+//Anything else, just to be thorough.
+trace Inspector else *******************;
+  let vFROMA='';
+  set vFileList='';
+  let vNextStatement='';
+End if
+
+let vCompletetracker=0;
+trace Inspector call enter *******************;
+call OrganizeSourceFilesByScanDate ('$(vInspectorNewSourceFiles)','Inspector','$(vFROMB)','FromBRouter',$(vInspectorBaseDate),$(vInspectorOffsetInt),'$(vInspectorSourceDateFormat)','$(vInspectorFileTable)');
+trace Inspector call exit*******************;
+// let vNumRows        =NoOfRows('$(InspectorQVDTable)'); 
+trace Inspector vNumRows = *******************;
+let vNumRows=NoOfRows('TEMP_FilesByDateSorted');
+for filerow=0 to $(vNumRows)-1
+trace Inspector filerow = *******************;
+  let file         =Peek('filename'    , $(filerow),'TEMP_FilesByDateSorted');
+  let vrealscandate=Peek('realscandate', $(filerow),'TEMP_FilesByDateSorted');
+  let vDEMOscandate=Peek('DEMOscandate', $(filerow),'TEMP_FilesByDateSorted');  
+    if '$(vDemoSwitch)'=0 then
+      let vThisScanDate='$(vrealscandate)';
+    else 
+      let vThisScanDate='$(vDEMOscandate)';
+    end if;     
+if '$(vSourceSwitch)'=0 then
+  call FileNameFromFilePath ('$(file)');   //creates variable vFilenameclean = filename.ext 
+else 
+  let vFilenameclean='$(file)';
+end if //if '$(vSourceSwitch)'=0 then
+
+let vCompletetracker=$(vCompletetracker)+1;
+
+let vIncorpMsg='*********'
+               &chr(10)&'Incorporating file: $(vFilenameclean),'
+               &chr(10)&'$(vCompletetracker)/$(vNoOfFiles) files'
+               &chr(10)&'*********';
+let vCompMsg='*********'
+             &chr(10)&'Completed file: $(vFilenameclean),'
+             &chr(10)&'$(vCompletetracker)/$(vNoOfFiles) files'
+             &chr(10)&'*********';
+
+//Plug the necessary values into the FROM statements, depending on the source
+if $(vSourceSwitch)=0 then
+  set vFROMA=$(file);
+elseif $(vSourceSwitch)=1 then 
+  let vFROMA = 'lib://$(vSPConnector)/$(vLibraryEntityTypeName)/$(vProject)/$(vInspectorfolderpath)/$(vFilenameclean)';
+end if //if $(vSourceSwitch)=0 then
+Call GenerateFROMBs('$(vFROMB)','FromBRouter');   
+
+trace $(vIncorpMsg);
+
+// build Inspector QVD
+[$(InspectorQVDTable)_Temp]:
+Noconcatenate LOAD
+	[DELETE / KEEP],
+	[AWS Account Id],
+	Capitalize([Severity]) as SeverityID,
+    if (Capitalize([Severity]) = 'Very High' or Capitalize([Severity]) = 'High','CAT I',
+        if(Capitalize([Severity]) = 'Medium', 'CAT II',
+            if(Capitalize([Severity]) = 'Low', 'CAT III',
+              if (Capitalize([Severity]) = 'Information', 'Info'
+    )))) as STIG_Severity,
+	'SI-2'  as Control_Temp,
+	[Fix Available],
+	[Finding Type],
+	[Title] as CVE_Title,
+	[Description],
+	[Finding ARN],
+    Timestamp(Timestamp#([First Seen], 'YYYY-MM-DDThh:mm:ssK') )  as [First Seen],
+	Timestamp(Timestamp#([Last Seen], 'YYYY-MM-DDThh:mm:ssK') )  as [Last Seen],
+    Timestamp(Timestamp#([Last Updated], 'YYYY-MM-DDThh:mm:ssK') )  as [Scan Date],
+    [Resource ID] as HostKeyID,
+	[Container Image Tags] as [Hostname],
+	[Region],
+	[Platform] as OS,
+// 	[Resource Tags],
+	[Affected Packages] as Software,
+	[Package Installed Version],
+	[Fixed in Version],
+	[Package Remediation],
+	[File Path],
+	[Network Paths],
+	[Age (Days)],
+	[Remediation] as Recommendation,
+	[Inspector Score] as [CVSS Score],
+	[Inspector Score Vector],
+    if([Status] = 'ACTIVE', 'Open', 'Closed' ) as STATUS,
+	[Vulnerability Id] as CVE_ID,
+    [Vulnerability Id] as VulID,
+	[Vendor],
+	[Vendor Severity],
+	[Vendor Advisory],
+	[Vendor Advisory Published],
+	[NVD CVSS4 Score],
+	[NVD CVSS4 Vector],
+	[NVD CVSS3 Score],
+	[NVD CVSS3 Vector],
+	[NVD CVSS2 Score],
+	[NVD CVSS2 Vector],
+	[Vendor CVSS4 Score],
+	[Vendor CVSS4 Vector],
+	[Vendor CVSS3 Score],
+	[Vendor CVSS3 Vector],
+	[Vendor CVSS2 Score],
+	[Vendor CVSS2 Vector],
+	[Resource Type],
+	[Ami],
+// 	[Resource Public Ipv4],
+// 	[Resource Private Ipv4],
+// 	[Resource Ipv6],
+// 	[Resource Vpc],
+// 	[Port Range],
+	[Epss Score],
+	[Exploit Available],
+	Timestamp(Timestamp#([Last Exploited At], 'YYYY-MM-DDThh:mm:ssK') ) AS [Last Exploited At],
+// 	[Lambda Layers],
+// 	[Lambda Package Type],
+// 	[Lambda Last Updated At],
+	[Reference Urls],
+	[Detector Name],
+	[Package Manager],
+	Timestamp([Image Last In Use At] ) AS [Image Last In Use At],
+	[Image In Use Count],
+    if ('$(vSourceSwitch)'=0,'$(file)',filename()) as $(vSourceFileField),
+    '$(vProject)' & [Resource ID]  as ProgramHostID
+FROM [$(vFROMA)]
+// FROM [lib://AttachedFiles/Inspector_Data_fsa_cloud_FY25Q3.csv]
+(txt, codepage is 28591, embedded labels, delimiter is ',', msq);
+
+
+//If the main data table has not been created, then rename the Temp table to the main table. Otherwise, concatenate.
+
+
+// Rename Counts table if it doesn't exist, else concatenate it.    
+IF ALT(NoOfRows('$(InspectorQVDTable)'), -1) = -1 THEN 
+       RENAME TABLE [$(InspectorQVDTable)_Temp] to [$(InspectorQVDTable)];
+ELSE
+      CONCATENATE ([$(InspectorQVDTable)])
+      LOAD * RESIDENT [$(InspectorQVDTable)_Temp];
+      drop table $(InspectorQVDTable)_Temp;
+END IF
+
+
+trace $(vCompMsg);
+next filerow;
+
+Call DropATable ('TEMP_FilesByDateSorted');
+//***************************************************************************************************************************************************
+//  The if statement below is a check to see if the table from the script below.  
+//	The script above will run regardless, however, if no Inspector files are found, the "Inspector_Temp" table will not be created.
+//***************************************************************************************************************************************************
+
+//If there is an actual data table created AND there were new source files to add, then write the QVD
+
+Call StoreATable ('$(vDataTableName)','lib://$(vStorePathInspector)','1');
+if NoOfRows('$(vDataTableName)')>0 AND $(vNoOfFiles)>0 THEN //if vConcatenate >0 Then
+//***************************************************************************************************************************************************
+//  concatenate the new files to the QVDs.
+//***************************************************************************************************************************************************
+
+trace Inspector QVD stored: lib://$(vStorePathInspector);
+else
+//***************************************************************************************************************************************************
+// there are no new files to concatenate.
+//***************************************************************************************************************************************************
+trace No new Inspector File exists for $(vProject);
+end if;  //NoOfRows('$(vDataTableName)')>0 AND $(vNoOfFiles)>0 THEN
+
+end if //if $(vNumberOfNewInspectorFiles)<>-1 then
+Call DropATable ('$(vDataTableName)_UniqueSource');
+Call DropATable ('$(vInspectorFileTable)');
+Call DropATable ('FromBRouter');
+end sub

@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(wc -l \"/d/Users/aclomera/Documents/GitHub/QOSCAL/CLaaS Scripts\"/*.qvs)"
+    ]
+  }
+}

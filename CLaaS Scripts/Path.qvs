@@ -1,0 +1,417 @@
+//////////////////
+////////INPUTS FOR SHAREPOINT
+//////////////////
+//Define values for the SharePoint connector.
+//If vSourceSwitch is not set to 1, these values will not affect the script.
+  //For the SharePoint site, library 
+//  let vSPConnect  ='https://localhost:5555';
+//  let vsubsite    ='/sites/claas';
+//  let vlibraryname='IPKeysDEMO';
+//  let vToken      ='9k8g3j7n3kj6';
+////////////////
+////////////////
+
+//Define path for Mapping File. 
+//There is only one Mapping File whether in Single-Project or Enterprise Mode
+//This must lie outside the Paths (vProject) subroutine. 
+let vMappingfilequery      ='$(vMappingfolderpath)/$(vMappingfilename)';
+let vMappingfullpathlocal  ='$(vConnection)/$(vCustomer)/$(vMappingfilequery)';
+
+
+//////////////////
+////////Subroutine
+//////////////////
+Sub PathValidation
+//For vSourceSwitch=0 (Local)
+//Validate the Connector and paths to the Customer folder and Mapping file.
+//Source file paths (e.g. .nessus, etc) are validated in the Paths subroutine
+
+Set ErrorMode=0;
+//Check for valid connector (local)
+//If the connector is not valid, then the script will immediately end
+trace *****Checking Connector*********;
+for each dir1 in dirlist ('lib://$(vConnection)')
+if ScriptError = 'File Not Found' then
+  let vErrmsg='***** BAD CONNECTOR********************** *'&chr(10)&
+              '*                                         *'&chr(10)& 
+              '*The variable vConnection refers          *'&chr(10)&
+              '*to an invalid connector or a connector   *'&chr(10)&
+              '*containing no directories.               *'&chr(10)&
+              '*                                         *'&chr(10)&
+              '*The current value of vConnection is:     *'&chr(10)& 
+              '*"$(vConnection)"                          '&chr(10)& 
+              '*                                         *'&chr(10)&                 
+              '********************************************';
+  trace $(vErrmsg);
+  Exit Script;
+end if
+Next dir1
+trace *****CONNECTOR OK*********;
+
+//Now check for a valid mapping file.
+//If a mapping file is not found, then the script will end.
+let vNumberofmappingfiles=0;
+let vFoundfiles=chr(10)&'*******vMappingfullpathlocal:'&chr(10)&'Searching for Mapping file'&chr(10)&'lib://$(vMappingfullpathlocal)'; 
+for each file in filelist ('lib://$(vMappingfullpathlocal)')
+  let vNumberofmappingfiles=$(vNumberofmappingfiles)+1;
+  let vFilenameindex=index('$(file)','/',-1);
+  let vFilename=mid('$(file)',$(vFilenameindex));
+  let vFoundfiles='$(vFoundfiles)'&chr(10)&chr(10)&'*****Mapping File Found!*****'; 
+Next file 
+if $(vNumberofmappingfiles)=0 then
+  let vFileerrmsg='$(vFileerrmsg)'&chr(10)&chr(10)&
+                  '***** MAPPING FOLDER ERROR**************** *'&chr(10)&
+                  '*-EITHER-                                  *'&chr(10)&
+                  '*The folder/file path defined by variable  *'&chr(10)&
+                  '*vMappingfullpathlocal is invalid          *'&chr(10)&
+                  '*-OR-                                      *'&chr(10)& 
+                  '*it does not contain the file defined by   *'&chr(10)&
+                  '*the variable vMappingfilename.            *'&chr(10)& 
+                  '*                                          *'&chr(10)&
+                  '*The full Mapping path is currently:       *'&chr(10)&
+                  '*lib://$(vMappingfullpathlocal)'             &chr(10)&                   
+                  '*                                          *'&chr(10)& 
+                  '*Validate vMappingfolderpath, currently:   *'&chr(10)&
+                  '*"$(vMappingfolderpath)"'                    &chr(10)&
+                  '*Validate the value of vMappingfilename:   *'&chr(10)& 
+                  '*"$(vMappingfilename)"                      '&chr(10)&                  
+                  '********************************************';
+  trace $(vFileerrmsg);
+  Exit script;
+end if //$(vNumberofmappingfiles)=0 then
+trace $(vFoundfiles);
+Set ErrorMode=1;
+End Sub  //PathValidation
+////////////////////
+////////END Subroutine 
+////////////////////
+
+
+////////////////////
+////////SUBROUTINE 
+////////////////////
+Sub QVDStorePaths (vProject)
+let vStorePath ='$(vConnectionStore)/$(vCustomer)/$(vProject)/QVD';
+
+
+//Generate full file names and store paths and join them to QVDFilesRouter as Fields "QVDFileName" and "StorePath", respectively
+StorePaths:
+NoConcatenate Load
+*
+Inline
+[FileType,QVDFileName,StorePath];
+
+for i=0 to '$(vQVDFileRouterRows)'-1
+  let vThisFileType     =PEEK('FileType','$(i)','QVDFilesRouter');            //e.g. FortifyStandardCounts
+  let vThisBaseName     =PEEK('QVDBaseName','$(i)','QVDFilesRouter');         //e.g. Fortify_Standardized_Counts
+  let vThisFileName     ='$(vPrefix)$(vThisBaseName)$(vSuffix).QVD';
+  Concatenate(StorePaths)
+  Load
+  *
+  Inline 
+  [FileType          ,QVDFileName          ,StorePath                
+   $(vThisFileType)  ,$(vThisFileName)     ,$(vStorePath)/$(vThisFileName)];
+next i
+
+let vStorePathNessus           =LOOKUP('StorePath','FileType','Nessus'        ,'StorePaths');
+let vStorePathNessusSoftware   =LOOKUP('StorePath','FileType','NessusSoftware','StorePaths');
+let vStorePathNessusPPSM       =LOOKUP('StorePath','FileType','NessusPPSM'    ,'StorePaths');
+let vStorePathNessusCPE        =LOOKUP('StorePath','FileType','NessusCPE'     ,'StorePaths');
+let vStorePathNessusCompliance =LOOKUP('StorePath','FileType','NessusCompliance','StorePaths');
+let vStorePathCheckList        =LOOKUP('StorePath','FileType','CheckList'     ,'StorePaths');
+let vStorePathBurp             =LOOKUP('StorePath','FileType','Burp'          ,'StorePaths');
+let vStorePathPrisma           =LOOKUP('StorePath','FileType','Prisma'        ,'StorePaths');
+let vStorePathRHACS            =LOOKUP('StorePath','FileType','RHACS'         ,'StorePaths');
+let vStorePathInspector       =LOOKUP('StorePath','FileType','Inspector'    ,'StorePaths');
+let vStorePathSCAP             =LOOKUP('StorePath','FileType','SCAP'          ,'StorePaths');
+  //Fortify locations
+let vStorePathFortifyStandardCounts =LOOKUP('StorePath','FileType','FortifyStandardCounts' ,'StorePaths');
+let vStorePathFortifyVulnerabilities=LOOKUP('StorePath','FileType','FortifyVulnerabilities','StorePaths');
+let vStorePathFortifyVulnComments    =LOOKUP('StorePath','FileType','FortifyVulnComments'  ,'StorePaths');
+let vStorePathFortifyVulnCounts     =LOOKUP('StorePath','FileType','FortifyVulnCounts'     ,'StorePaths');
+let vStorepathFortifyReportSummaries=LOOKUP('StorePath','FileType','FortifyReportSummaries','StorePaths');
+  //Source File Summaries
+let vStoreSourceFileIndex      =LOOKUP('StorePath','FileType','SourceFileIndex' ,'StorePaths');
+let vStorePathSourceFileMinMax =LOOKUP('StorePath','FileType','SourceFileMinMax','StorePaths');
+let vStorePathQVDRowsReport    =LOOKUP('StorePath','FileType','QVDRowsReport'   ,'StorePaths');
+
+//Define the table that will be used to create the report on initial and final numbers of lines in each QVD.
+//Ultimately it will have three fields: QVDName, Initial, Final
+//Only QVDName and Initial are defined here.  Final will be added as a Left Join operation later. 
+let vRowsReportTableName  =LOOKUP('QVDTableName','FileType','QVDRowsReport' ,'QVDFilesRouter');
+let vQVDRowsReportFileName=LOOKUP('QVDFileName' ,'FileType','QVDRowsReport' ,'StorePaths');
+$(vRowsReportTableName):
+Noconcatenate load
+*
+Inline [QVDName,Initial];
+End Sub //QVDStorePaths
+//////////////////
+////////END SUBROUTINE
+//////////////////
+
+
+////////////////////////////////////////////////////////////////////////////////
+////////SUB ROUTINE
+////////////////////////////////////////////////////////////////////////////////
+Sub LocalPaths (vProject)
+//////////////////
+////////GENERATE ALL CONNECTION PATHS
+//////////////////
+//FOR vSourceSwitcvh = 0 (Local)
+//This is done in steps to allow for validation
+//The end result is to build for each file type  a -fullpath variable containing the filelist reference (i.e. for a lib://...)
+//String together -folderpath and -criteria for each file type to create the full query path.
+//Create path to directory (no file names or file queries)
+
+//COME BACK
+SourceFilePaths:
+Noconcatenate LOAD
+*
+INLINE [FileType,SourceFileDirectory,SourceFileFullPath];
+
+let vSourceFileRouterRows=NoOfRows('SourceFileRouter');
+for sourcefilerouterrow=0 to $(vSourceFileRouterRows)-1
+  let vThisFileType  =PEEK('FileType'          ,$(sourcefilerouterrow),'SourceFileRouter');
+  let vThisFolderPath=PEEK('SourceFilePath'    ,$(sourcefilerouterrow),'SourceFileRouter');
+  let vThisCriteria  =PEEK('SourceFileCriteria',$(sourcefilerouterrow),'SourceFileRouter');
+  let vThisDirectoryPathLocal='$(vConnection)/$(vCustomer)/$(vProject)/$(vThisFolderPath)';
+  let vThisFullPathLocal     ='$(vThisDirectoryPathLocal)\$(vThisCriteria)';
+  Concatenate (SourceFilePaths)
+  LOAD   
+  *
+  Inline
+  [FileType           ,SourceFileDirectory        ,SourceFileFullPath
+   $(vThisFileType)   ,$(vThisDirectoryPathLocal) ,$(vThisFullPathLocal)
+  ];
+next sourcefilerouterrow
+
+let vNessusfullpathlocal   =LOOKUP('SourceFileFullPath','FileType','Nessus','SourceFilePaths');     //e.g. $(vConnection)/$(vCustomer)/$(vProject)/$(vThisFolderPath)\$(vThisCriteria)
+let vChecklistfullpathlocal=LOOKUP('SourceFileFullPath','FileType','CheckList','SourceFilePaths');
+let vBurpfullpathlocal=LOOKUP('SourceFileFullPath','FileType','Burp','SourceFilePaths');
+let vRHACSfullpathlocal=LOOKUP('SourceFileFullPath','FileType','RHACS','SourceFilePaths');
+let vPrismafullpathlocal=LOOKUP('SourceFileFullPath','FileType','Prisma','SourceFilePaths');
+let vInspectorfullpathlocal=LOOKUP('SourceFileFullPath','FileType','Inspector','SourceFilePaths');
+let vSCAPfullpathlocal     =LOOKUP('SourceFileFullPath','FileType','SCAP','SourceFilePaths');
+  //Two Fortify types
+let vFortifySTIGfullpathlocal    =LOOKUP('SourceFileFullPath','FileType','FortifySTIG','SourceFilePaths');    //FileList2 on Fortify tab
+let vFortifyXMLfullpathlocal     =LOOKUP('SourceFileFullPath','FileType','FortifyXML','SourceFilePaths');     //FileList1 on Fortify tab
+
+
+
+
+
+//////////////////
+////////CHECK ALL LOCAL CONNECTION PATHS
+//////////////////
+if $(vSourceSwitch)=0 then 
+Set ErrorMode=0;
+/*
+Connector Check was here
+*/
+//Check for valid connector (local)
+
+
+//Check that the vProject folder exists (local)
+let vFoundProject=0;
+let vDirsfound=0;
+trace *******Searching for directory "$(vProject)" in $(vConnection)/$(vCustomer);
+for each dir2 in dirlist ('lib://$(vConnection)/$(vCustomer)\*')
+  let vDirsfound=$(vDirsfound)+1;
+  let vDirnameindex=index('$(dir2)','/',-1);
+  let vDirname=mid('$(dir2)',$(vDirnameindex)+1);
+  trace $(vDirsfound). $(vDirname); 
+  if '$(vDirname)' like '$(vProject)'; 
+    trace FOUND IT!;
+    let vFoundProject=1;
+    exit for;
+  end if; 
+Next dir2 //for each dir in dirlist ('lib://$(vConnection)/$(vCustomer)/*')
+if $(vFoundProject)=0 then
+    let vErrmsg='***** BAD PROJECT************************ *'&chr(10)&
+                '*                                         *'&chr(10)& 
+                '*      EITHER:                            *'&chr(10)& 
+                '*The vConnection/vCustomer path:          *'&chr(10)& 
+                '*"$(vConnection)/$(vCustomer)"             '&chr(10)&                
+                '*contains no Project folders              *'&chr(10)& 
+                '*                                         *'&chr(10)&
+                '*     OR                                  *'&chr(10)&
+                '*                                         *'&chr(10)&
+                '*Variable vProject is set to a bogus value*'&chr(10)& 
+                '*No folder "$(vProject)"                   '&chr(10)&                
+                '*exists within vConnection/vCustomer:     *'&chr(10)&
+                '*"$(vConnection)/$(vCustomer)"             '&chr(10)&
+                '********************************************';
+     trace $(vErrmsg);
+  Exit script;
+end if //if $(vFoundProject)=0 then
+
+
+
+
+//Now, check all the individual file folder within paths the directory defined by lib://$(vConnection)/$(vCustomer)/$(vProject)
+//This includes the file query criteria 
+let vTotalfilesfound=0;
+let vFileerrmsg='';
+
+Temp_RecordsWithSourceFileTableKeys:  //Only the rows in QVDFilesRouter with a value in the SourceFileRouterKey column
+NoConcatenate LOAD
+*
+Resident QVDFilesRouter
+Where LEN(SourceFileRouterKey)>0;
+
+
+
+
+Temp_SourceFileTableInfo:            //Only the rows in SourceFileRouter with a value in the SourceFilesTableName column
+Noconcatenate Load
+FileType,
+SourceFilesTableName,
+SourceFileCountVariableName
+Resident SourceFileRouter
+Where LEN(SourceFilesTableName)>0;
+
+for sourcefiletable=0 to NoOfRows('Temp_SourceFileTableInfo')-1
+  let vThisFileType           =PEEK('FileType'                   ,$(sourcefiletable) ,'Temp_SourceFileTableInfo'); //e.g. Nessus
+  let vThisSourceFileTableName=PEEK('SourceFilesTableName'       ,$(sourcefiletable) ,'Temp_SourceFileTableInfo'); //e.g. Nessusfileslocal       
+  let vThisFileCountVarName   =PEEK('SourceFileCountVariableName',$(sourcefiletable) ,'Temp_SourceFileTableInfo'); //e.g. vNumberofnessusfiles
+  let vThisFullPathLocal      =LOOKUP('SourceFileFullPath','FileType','$(vThisFileType)','SourceFilePaths');       //e.g. 
+
+  Call CheckLocalFolder ('$(vThisFullPathLocal)','$(vThisFileCountVarName)','$(vThisSourceFileTableName)');
+ 
+next sourcefiletable
+
+Call DropATable('Temp_SourceFileTableInfo');
+
+//Create a table containing only the names of those source files to be added to each QVD
+//Determine initial number of rows in each existing QVD
+
+for qvdrouterrow=0 to NoOfRows('Temp_RecordsWithSourceFileTableKeys')-1
+  let vThisType            =PEEK('FileType'            ,'$(qvdrouterrow)','Temp_RecordsWithSourceFileTableKeys');  //e.g. NessusPPSM
+  let vThisFilesToAddTable =PEEK('SourceFilesToAdd'    ,'$(qvdrouterrow)','Temp_RecordsWithSourceFileTableKeys');  //e.g. NessusFilesToAdd
+  let vThisSourceFileKey   =PEEK('SourceFileRouterKey' ,'$(qvdrouterrow)','Temp_RecordsWithSourceFileTableKeys');  //e.g. "Nessus" or "FortifySTIG,FortifyXML" (without quotes)
+  let vThisQVDTableName    =PEEK('QVDTableName'        ,'$(qvdrouterrow)','Temp_RecordsWithSourceFileTableKeys');   //e.g. NessusSoftwareQVDTable
+    let $(vThisQVDTableName)  ='$(vThisQVDTableName)';                                  //e.g. let NessusSoftwareQVDTable='NessusSoftwareQVDTable'; The variable name matches its value.
+  let vThisStorePath       =LOOKUP('StorePath'   ,'FileType','$(vThisType)','StorePaths');                         //e.g. Connector/IPKeys (DEMO)/Program1/QVD/NessusPPSM.QVD
+  let vThisQVDName         =LOOKUP('QVDFileName' ,'FileType','$(vThisType)','StorePaths');                        //e.g. NessusPPSM.QVD  
+  let vThisQVDSourceNameField=LOOKUP('SourceNameField' ,'FileType','$(vThisType)','QVDFilesRouter');  //e.g. File_Ckl 
+  let vThisSourceFilesTableName=LOOKUP('SourceFilesTableName','FileType','$(vThisSourceFileKey)','SourceFileRouter'); //e.g. FortifySTIGfileslocal
+trace $(vThisType);
+
+  //Do not run QVDToTableAndUniqueSourceFiles in DEMO mode. 
+  //This section is used to determine what new source files need to be incoporated into the existing QVD, if there is one. 
+  //In DEMO Mode, all QVDs are rewriten from scratch. The "New" files table is just set to match the All local files table (e.g. NessusFilesToAdd is just set to Nessusfilesloca)
+if '$(vDemoSwitch)'=0 then
+     Call QVDToTableAndUniqueSourceFiles ('$(vThisQVDTableName)','$(vThisStorePath)','$(vThisQVDSourceNameField)'); 
+     //If there is an existing QVD for this file type, then $(vThisQVDTableName) will have rows. 
+     //If so, execute the following to create a table containing JUST THE FILES TO BE ADDED
+     //$(vThisQVDTableName) will be used in the appropriate File Type section (Nessus, SCAP, etc)
+     if NoOfRows('$(vThisQVDTableName)_UniqueSource')>0 then //If there is a QVD table with rows
+       //TempCompare contains the names of source files that are already included in the QVD
+       //Mirror the $(vThisQVDTableName)_UniqueSource changing the name of the gile name column to SourceFilesAlreadyLoaded for comparison
+       TempCompare:                            
+       LOAD Distinct
+       $(vThisQVDSourceNameField) as SourceFilesAlreadyLoaded
+       Resident $(vThisQVDTableName)_UniqueSource;
+
+         $(vThisFilesToAddTable):
+         Noconcatenate Load
+         *
+         Resident $(vThisSourceFilesTableName)
+         Where NOT EXISTS(SourceFilesAlreadyLoaded,Name);
+
+    elseif Not isnull(TableNumber('$(vThisSourceFilesTableName)')) then   // of if NoOfRows('$(vThisQVDTableName)_UniqueSource')>0; If $(vThisSourceFilesTableName) actually exists then
+        //Otherwise, there is no existing QVD and so ALL source files must be used. 
+          $(vThisFilesToAddTable):
+          Noconcatenate Load
+          *
+          Resident $(vThisSourceFilesTableName);
+    End If //     if NoOfRows('$(vThisQVDTableName)_UniqueSource')>0  then
+    Call DropATable('TempCompare');     
+  
+
+   elseif Not isnull(TableNumber('$(vThisSourceFilesTableName)')) then //else of if '$(vDemoSwitch)'=0 then  If $(vThisSourceFilesTableName) actually exists then
+    //Otherwise, vDEMOSwitch=1 and so:
+    //In DEMO mode, all QVDs get rewritten from scratch every time. 
+    //The "FilesToAdd" table must contain all local source files. 
+   $(vThisFilesToAddTable):
+    Noconcatenate Load
+    *
+    Resident $(vThisSourceFilesTableName);
+  end if //if '$(vDemoSwitch)'=0 then  
+
+  let vInitialLines=NoOfRows('$(vThisQVDTableName)');
+  if LEN('$(vInitialLines)')=0 then 
+    let vInitialLines='0';
+  end if;
+  Concatenate ($(vRowsReportTableName))
+  load
+  *
+  Inline [QVDName         ,Initial
+          $(vThisQVDName) ,$(vInitialLines)]; 
+next qvdrouterrow
+
+//The following variables contain names of New file tables (format is AAA_FilesToAdd) and Number of rows they contain. To be used in each load section. 
+let vNessusNewSourceFiles  =LOOKUP('SourceFilesToAdd','FileType','Nessus','QVDFilesRouter');  //e.g. NessusFilesToAdd - created in the Path Subroutine
+let vNumberOfNewNessusFiles=ALT(NoOfRows('$(vNessusNewSourceFiles)'),-1);
+
+let vFortifySTIGNewSourceFiles  =LOOKUP('SourceFilesToAdd','FileType','FortifyVulnerabilities','QVDFilesRouter');  //e.g. FortifyVulnerabilitiesFilesToAdd - created in the Path Subroutine
+let vNumberOfNewFortifySTIGFiles=ALT(NoOfRows('$(vFortifySTIGNewSourceFiles)'),-1);
+
+let vFortifyXMLNewSourceFiles  =LOOKUP('SourceFilesToAdd','FileType','FortifyStandardCounts','QVDFilesRouter');  //e.g. FortifyStandardCountsFilesToAdd - created in the Path Subroutine
+let vNumberOfNewFortifyXMLFiles =ALT(NoOfRows('$(vFortifyXMLNewSourceFiles)'),-1);
+
+let vBurpNewSourceFiles  =LOOKUP('SourceFilesToAdd','FileType','Burp','QVDFilesRouter');  //e.g. BurpFilesToAdd - created in the Path Subroutine
+let vNumberOfNewBurpFiles =ALT(NoOfRows('$(vBurpNewSourceFiles)'),-1);
+
+let vRHACSNewSourceFiles  =LOOKUP('SourceFilesToAdd','FileType','RHACS','QVDFilesRouter');  //e.g. RHACSFilesToAdd - created in the Path Subroutine
+let vNumberOfNewRHACSFiles =ALT(NoOfRows('$(vRHACSNewSourceFiles)'),-1);
+
+let vPrismaNewSourceFiles  =LOOKUP('SourceFilesToAdd','FileType','Prisma','QVDFilesRouter');  //e.g. PrismaFilesToAdd - created in the Path Subroutine
+let vNumberOfNewPrismaFiles =ALT(NoOfRows('$(vPrismaNewSourceFiles)'),-1);
+
+let vInspectorNewSourceFiles  =LOOKUP('SourceFilesToAdd','FileType','Inspector','QVDFilesRouter');  //e.g. InspectorFilesToAdd - created in the Path Subroutine
+let vNumberOfNewInspectorFiles =ALT(NoOfRows('$(vInspectorNewSourceFiles)'),-1);
+
+let vCheckListNewSourceFiles  =LOOKUP('SourceFilesToAdd','FileType','CheckList','QVDFilesRouter');  //e.g. CHecklistFilesToAdd - created in the Path Subroutine
+let vNumberOfNewCheckListFiles  =ALT(NoOfRows('$(vCheckListNewSourceFiles)'),-1);
+
+let vSCAPNewSourceFiles  =LOOKUP('SourceFilesToAdd','FileType','SCAP','QVDFilesRouter');   //e.g. SCAPFilesToAdd - created in the Path Subroutine
+let vNumberOfNewSCAPFiles  =ALT(NoOfRows('$(vSCAPNewSourceFiles)'),-1);
+
+
+Call DropATable('Temp_RecordsWithSourceFileTableKeys');
+
+let vTotalfilesfound=$(vNumberofnessusfiles)+$(vNumberofcklfiles)+$(vNumberofscapfiles)+$(vNumberoffortifyXMLfiles)
++$(vNumberofBurpfiles)+$(vNumberofRHACSfiles)+$(vNumberofPrismafiles)+$(vNumberofInspectorfiles); //STIG files are also included in the XML file total
+
+
+//If the total number files without the mapping files = 0, then add error message and set self destruct. 
+if $(vTotalfilesfound)=0 then
+  let vFileerrmsg='$(vFileerrmsg)'&chr(10)&chr(10)&'No source files were found!';
+end if //if $(vTotalfilesfound)=0 then
+
+//let vReportedNumXML=$(vNumberoffortifyXMLfiles)-$(vNumberoffortifySTIGfiles);
+
+let vFilereport=
+      '------NUMBER OF LOCAL FILES FOUND:----'         &chr(10)&
+      'lib://$(vConnection)/$(vCustomer)/$(vProject)'  &chr(10)&
+      'Nessus          : $(vNumberofnessusfiles), '    &chr(10)&
+      'CheckList      : $(vNumberofcklfiles),'         &chr(10)&
+      'SCAP           : $(vNumberofscapfiles),'        &chr(10)&
+      'Fortify STIG   : $(vNumberoffortifySTIGfiles),' &chr(10)&
+      'Fortify XML    : $(vNumberoffortifyXMLfiles),'  &chr(10)&
+      'Burp XML       : $(vNumberofBurpfiles),'        &chr(10)&
+      'RHACS CSV      : $(vNumberofRHACSfiles), '      &chr(10)&
+      'Prisma CSV     : $(vNumberofPrismafiles),'	   &chr(10)&
+      'Inspector CSV  : $(vNumberofInspectorfiles),'   &chr(10)&
+      '--------------------------------------'         &chr(10)&
+      'TOTAL          : $(vTotalfilesfound)';
+trace $(vFilereport);
+
+
+Set ErrorMode=1;
+end if //if $(vSourceSwitch)=0 then 
+//////////////////
+////////END Subroutine
+//////////////////
+end Sub//LocalPaths(vProject)

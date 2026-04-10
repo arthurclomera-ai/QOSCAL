@@ -1,0 +1,350 @@
+Sub QVDAndSourceReports
+trace ******************entering QVDAndSourceReports*******************;
+//After QVDs are complete, they will be read and all source files recorded in the following QVDs:
+  //All_Source_Files    : Final list of all source files used for all QVDtypes in a given project and containing individual scan dates.  
+  //QVDRowsReport       : Initial and final number of rows for all QVDs generated for this project 
+  //Source_File_MinMax  : Earliest and latest source file for each QVD type
+
+AllSourceFilesWithDates0:
+Noconcatenate Load 
+* 
+Inline [FileType,FileName,ScanDate];
+
+FinalRowsReport0:
+Noconcatenate Load
+*
+INLINE [QVDName,Final,Delta];
+
+//FinalRowsReport1a is used for concatenating Final Report QVDs
+FinalRowsReport1a:
+Noconcatenate Load
+*
+INLINE [QVDName,Initial];
+
+
+//Compile information for the All_Source_Files QVD
+for filetype =0 to NoOfRows('QVDFilesRouter')-1    
+  let vThisFileType =PEEK('FileType'            ,'$(filetype)','QVDFilesRouter');  //e.g. Nessus, FortifyStandardCounts, etc
+  let vThisSourceKey=PEEK('SourceFileRouterKey' ,'$(filetype)','QVDFilesRouter');  //e.g. Nessus, FortifyXML, etc
+    //Simplify the 'Fortify...' filetype just 'Fortify' for recording onto QVD tables
+    if Mid('$(vThisFileType)',1,LEN('Fortify'))='Fortify' then
+      let vWriteFileType='Fortify';
+    else 
+      let vWriteFileType='$(vThisFileType)';
+    end if
+    let vThisStorePath    =LOOKUP('StorePath'      ,'FileType','$(vThisFileType)','StorePaths');  //e.g. Customer Connector/IPKeys (DEMO)/Program1/QVD/Nessus.QVD   field added to QVDFilesRouter dynamically in the Path Sub
+    let vThisQVDName      =LOOKUP('QVDFileName'    ,'FileType','$(vThisFileType)','StorePaths');  //e.g. Nessus.QVD   -------------------------------------------   field added to QVDFilesRouter dynamically in the Path Sub
+    let vThisFinalReport  =LOOKUP('FinalReport'    ,'FileType','$(vThisFileType)','QVDFilesRouter');  //0 or 1
+    let vThisFileNameField=LOOKUP('SourceNameField','FileType','$(vThisFileType)','QVDFilesRouter');  //e.g. File_Ckl
+    let vThisInitialCount =ALT(num(LOOKUP('Initial','QVDName','$(vThisQVDName)','$(vRowsReportTableName)')),0);
+trace ******************Line 39 QVDAndSourceReports*******************;
+//Get Data from existing QVD files if they exist
+//The following lines are based on the following if-then logic:
+  //If this is NOT a final report QVD
+  //else if this is not Demo mode (i.e. vDemoSwitch=0)
+  //Otherwise, refrain from pulling QVDs and set vNumberQVDRows and vThisDelta to 0.
+//This portion only runs for filetypes on the with a valid Scan Date Format
+trace ******************Line 46 vThisFinalReport: $(vThisFinalReport) *******************;
+if '$(vThisFinalReport)'=0 then 
+    Call QVDToTableAndUniqueSourceFiles ('TEMPSourceFiles','$(vThisStorePath)','$(vThisFileNameField)');  
+    let vSourceTable       ='TEMPSourceFiles';
+    let vSourceTable_Unique='$(vSourceTable)_UniqueSource';  
+  let vNumberQVDRows=ALT(NoOfRows('$(vSourceTable)'),0);  
+
+  //Only execute the following if the row on SourceFileRouter where FileType=vThisSourceKey has a value for DEMOBaseDate 
+  if LEN(LOOKUP('DEMOBaseDate','FileType','$(vThisSourceKey)','SourceFileRouter'))>0 then
+    for uniquesourcerow=0 to ALT(NoOfRows('$(vSourceTable_Unique)')-1,0)
+      let vThisFileName=PEEK('$(vThisFileNameField)'  ,'$(uniquesourcerow)','$(vSourceTable_Unique)');
+      let vThisScanDate=LOOKUP('Scan Date' ,'$(vThisFileNameField)','$(vThisFileName)','$(vSourceTable)');
+      
+      //FIX: Normalize the date to MM/DD/YYYY format
+      //Try to interpret the date from various formats and convert to standard format
+      let vNormalizedDate = Text(Date(Alt(
+        Date#('$(vThisScanDate)', 'M/D/YYYY'),
+        Date#('$(vThisScanDate)', 'MM/DD/YYYY'),
+        Date#('$(vThisScanDate)', 'YYYY-MM-DD'),
+        Date#('$(vThisScanDate)', 'YYYY-MM-DDTHH:mm:ss'),
+        Date#('$(vThisScanDate)', 'YYYY-MM-DDTHH:mm:ssZ'),
+        Date#('$(vThisScanDate)', 'YYYY-MM-DDTHH:mm:ss.ffffffZ'),
+        Date#('$(vThisScanDate)', 'MMM DD YY'),
+        Date#('$(vThisScanDate)', 'DD MMM YYYY'),
+        Date#('$(vThisScanDate)', 'YYYYMMDD'),
+        Num('$(vThisScanDate)')
+      ), 'MM/DD/YYYY'));
+      
+      //If normalization failed (result is empty or invalid), keep original value
+      if Len('$(vNormalizedDate)') = 0 or '$(vNormalizedDate)' = 'MM/DD/YYYY' then
+        let vNormalizedDate = '$(vThisScanDate)';
+      end if
+      
+      //Only add to AllSourceFilesWithDates0 if the filename is not blank and does not already appear on the table
+      if LEN('$(vThisFileName)')>0 AND LEN(LOOKUP('FileName','FileName','$(vThisFileName)','AllSourceFilesWithDates0'))=0  then   
+        Concatenate (AllSourceFilesWithDates0)
+        LOAD
+        *
+        Inline 
+        [FileType           , FileName         , ScanDate         
+         $(vWriteFileType)  , $(vThisFileName) , $(vNormalizedDate)];
+      end if;   //if LEN('$(vThisFileName)')>0
+    next uniquesourcerow
+  end if //if LEN(LOOKUP('DEMOBaseDate','FileType','$(vThisSourceKey)','SourceFileRouter'))>0 
+  let vThisDelta=num('$(vNumberQVDRows)')-num('$(vThisInitialCount)');
+
+  Call DropATable ('TEMPSourceFiles');
+  Call DropATable ('TEMPSourceFiles_UniqueSource');
+
+//Otherwise, if this is a final report filetype, And the script is NOT in DEMO Mode  
+elseif not('$(vDemoSwitch)'=1 and '$(vThisFinalReport)'=1) then      
+
+trace ******************Line 77 elseif *******************;
+  Call QVDToTableAndUniqueSourceFiles ('TEMPQVDTable','$(vThisStorePath)'); 
+  let vNumberQVDRows=ALT(num(NoOfRows('TEMPQVDTable')),0);
+  let vThisDelta=$(vNumberQVDRows)-$(vThisInitialCount);
+  Call DropATable ('TEMPQVDTable');
+  Call DropATable ('TEMPQVDTable_UniqueSource');
+
+//Otherwise, either the script is in DEMO Mode or this is a final report type, and the following must be set to 0
+else //else of if '$(vThisFinalReport)'=0 then 
+trace ******************Line 86 else *******************;
+  let vNumberQVDRows=0;
+  let vThisDelta    =0;
+end if //if '$(vThisFinalReport)'=0 then 
+
+if '$(vThisFinalReport)' = 1 then  //If this vThisFileType corresponds to FinalReport=1 on the QVDFilesRouter table
+trace ******************if Line 92 vThisFinalReport: $(vThisFinalReport) *******************;
+  Concatenate (FinalRowsReport1a)
+  Load
+  *
+  INLINE [QVDName         ,Initial
+          $(vThisQVDName) ,$(vNumberQVDRows)];
+
+ else
+trace ******************if Line 100 else  *******************;
+  Concatenate (FinalRowsReport0)
+  Load *
+  Inline 
+  [QVDName          ,Final             ,Delta
+   $(vThisQVDName) ,$(vNumberQVDRows) ,$(vThisDelta)
+  ];
+end if //'$(vThisFinalReport)' = 1 then 
+next filetype;
+
+
+
+join ($(vRowsReportTableName))
+Load
+*
+Resident FinalRowsReport0;
+drop table FinalRowsReport0;
+
+
+let vThisStorePath        =LOOKUP('StorePath'           ,'FileType','Nessus','StorePaths');         //e.g. $(vStorePath)/Nessus.QVD
+let vNessusSourceDirectory=LOOKUP('SourceFileDirectory' ,'FileType','Nessus','SourceFilePaths');   //e.g. $(vConnection)/$(vCustomer)/$(vProject)/Reports/GRC Reports/Nessus Scans
+let vSourceNameField      =LOOKUP('SourceNameField'     ,'FileType','Nessus','QVDFilesRouter');     //e.g. File_Ckl
+let vThisFROMB            =LOOKUP('ScanDateFROMB'       ,'FileType','Nessus','SourceFileRouter');   //e.g. vFROMB
+
+FromBRouter:
+Noconcatenate load
+*
+Resident GlobalFromBStatements
+Where FileType='Nessus';
+
+Call GenerateFROMBs('$(vFROMB)','FromBRouter');
+Call QVDToTableAndUniqueSourceFiles ('TEMPNessusSourceFiles','$(vThisStorePath)','$(vSourceNameField)');
+
+Call DropATable('FromBRouter');
+
+Temp_PluginDates:
+Noconcatenate Load
+*
+INLINE [FileName,PluginDate];
+
+//Build the base of a FROMA statement for the table to follow
+//Depends on whether the source is local or SharePoint
+//filename will be appended to the final FROMA in the loop
+if '$(vSourceSwitch)'=0 then //Local
+  let vFROMA_0='lib://$(vNessusSourceDirectory)/';  
+else                         //SharePoint
+  let vFROMA_0='lib://$(vSPConnector)/$(vLibraryEntityTypeName)/$(vProject)/$(vNessusfolderpath)/';
+end if 
+
+for nessusfile=0 to NoOfRows('TEMPNessusSourceFiles_UniqueSource')-1
+  let vThisFileName=PEEK('$(vSourceNameField)',$(nessusfile),'TEMPNessusSourceFiles_UniqueSource');
+  let vFROMA ='$(vFROMA_0)'&'$(vThisFileName)';
+trace ******************if Line 142 vThisFileName: $(vThisFileName) *******************;
+trace ******************if Line 143 vThisFROMB: $(vThisFROMB)*******************;
+trace ******************if Line 144 vNessusDatesWhereStatement: $(vNessusDatesWhereStatement)*******************;
+
+NEWFILE:
+Noconcatenate load
+  DISTINCT '$(vThisFileName)' as FileName,
+   Num(date#(mid(subfield(plugin_output,'Plugin feed version : ',2),1,8),'YYYYMMDD')) as PluginDate
+FROM [$(vFROMA)]
+$($(vThisFROMB))
+WHERE Match(pluginID,'19506');
+
+
+ CONCATENATE (Temp_PluginDates)
+ LOAD
+ *
+ Resident NEWFILE;
+
+Drop table NEWFILE;
+next nessusfile
+
+Call DropATable('TEMPNessusSourceFiles');
+Call DropATable('TEMPNessusSourceFiles_UniqueSource');
+
+
+LEFT JOIN (AllSourceFilesWithDates0)
+Load 
+FileName,
+PluginDate
+RESIDENT Temp_PluginDates;
+Call DropATable('Temp_PluginDates');
+
+//The left join will reorder the columns in AllSourceFilesWithDates0, so it needs to be reloaded as the final table with columns properly ordered. 
+//FIX: Also normalize the PluginDate to MM/DD/YYYY format
+AllSourceFilesWithDates:
+NoConcatenate Load
+FileType,
+FileName,
+ScanDate,
+Text(Date(Alt(PluginDate, Num(PluginDate)), 'MM/DD/YYYY')) as PluginDate
+Resident AllSourceFilesWithDates0;
+Call DropATable('AllSourceFilesWithDates0');
+
+//Get Min and Max scan dates for each file type
+Call CreateSortTable ('AllSourceFilesWithDates', 'AllSourceFilesWithDates_Asc',  'FileType asc,ScanDate asc');
+Call CreateSortTable ('AllSourceFilesWithDates', 'AllSourceFilesWithDates_Desc', 'FileType asc,ScanDate desc');
+
+//Build MinMax table in the following way only if there is an actual AllSourceFilesWithDates_Asc (i.e., there is at least one source file of any kind)
+If ALT(NoOfRows('AllSourceFilesWithDates_Asc'),-1)<>-1 then 
+  MinMax:
+  Load
+    FileType,
+    Text(ScanDate) as ScanDateMin
+  Resident AllSourceFilesWithDates_Asc
+  Where FileType<>Previous(FileType)
+  and LEN(ScanDate)>0; 
+
+  Drop Table AllSourceFilesWithDates_Asc;
+
+  left Join (MinMax)
+  Load
+    FileType,
+    Text(ScanDate) as ScanDateMax
+  Resident AllSourceFilesWithDates_Desc
+  Where FileType<>Previous(FileType)
+  and LEN(ScanDate)>0; 
+
+Drop Table AllSourceFilesWithDates_Desc;
+
+
+//Get overall Min Max for all file types
+//Call CreateSortTable ('AllSourceFilesWithDates', 'OverallDates_Asc' , 'ScanDate asc');
+
+
+Concatenate (MinMax)
+Load
+  'OVERALL' as FileType,
+  Text(Date(Min(Date#(ScanDate, 'MM/DD/YYYY')), 'MM/DD/YYYY')) as ScanDateMin,
+  Text(Date(Max(Date#(ScanDate, 'MM/DD/YYYY')), 'MM/DD/YYYY')) as ScanDateMax
+Resident AllSourceFilesWithDates;
+
+Concatenate (MinMax)
+Load
+  'PLUGIN' as FileType,
+  Text(Date(Min(Date#(PluginDate, 'MM/DD/YYYY')), 'MM/DD/YYYY')) as ScanDateMin,
+  Text(Date(Max(Date#(PluginDate, 'MM/DD/YYYY')), 'MM/DD/YYYY')) as ScanDateMax
+Resident AllSourceFilesWithDates;
+
+
+else // If $(vNumberofFiles)<>-1 then 
+  //Otherwise, there are no source files of any kind.  Create an empty MinMax table so that the script doesn't crash
+  MinMax:
+  Noconcatenate LOAD 
+  *
+  Inline [FileType,ScanDateMin,ScanDateMax];
+
+end if //If $(vNumberofFiles)<>-1 then 
+
+
+  Store AllSourceFilesWithDates into 'lib://$(vStoreSourceFileIndex)';
+  Store MinMax                  into 'lib://$(vStorePathSourceFileMinMax)';
+
+  if alt(NoOfRows('AllSourceFilesWithDates'),-1)>-1 then
+    let vFinalRowsAllSourceFiles=NoOfRows('AllSourceFilesWithDates');
+    let vFinalRowsMinMax        =NoOfRows('AllSourceFilesWithDates');
+    drop table AllSourceFilesWithDates;
+    drop table MinMax;
+  end if
+
+    FinalRowsReport1b:
+    NoConcatenate 
+    Load 
+    *
+    Inline 
+    [QVDName,Initial,Final,Delta];
+
+
+//Finalize Rows Report now that all QVDs are constructed
+Temp_FinalReportsRows:  //Just the rows from QVDFilesRouter where FinalReport=1
+Noconcatenate Load
+*
+Resident QVDFilesRouter
+Where FinalReport=1;
+
+for filetype =0 to NoOfRows('Temp_FinalReportsRows')-1;
+  let vThisFileType =PEEK('FileType' ,'$(filetype)','Temp_FinalReportsRows');
+    let vThisStorePath    =LOOKUP('StorePath'  ,'FileType','$(vThisFileType)','StorePaths');
+    let vThisQVDName      =LOOKUP('QVDFileName','FileType','$(vThisFileType)','StorePaths');
+    let vThisInitialCount =num(LOOKUP('Initial','QVDName','$(vThisQVDName)','FinalRowsReport1a'));
+    Call QVDToTableAndUniqueSourceFiles ('TEMPQVDTable','$(vThisStorePath)'); 
+    let vThisFinalCount=num(NoOfRows('TEMPQVDTable'));  
+    let vThisDelta=$(vThisFinalCount)-$(vThisInitialCount);
+
+    Concatenate (FinalRowsReport1b)
+    Load 
+    *
+    Inline 
+    [QVDName          ,Initial              ,Final              ,Delta
+     $(vThisQVDName)  ,$(vThisInitialCount) ,$(vThisFinalCount) ,$(vThisDelta)
+    ];
+    Call DropATable ('TEMPQVDTable');
+    Call DropATable ('TEMPQVDTable_UniqueSource');    
+next filetype  
+drop table Temp_FinalReportsRows;
+
+
+join ($(vRowsReportTableName))
+Load
+*
+Resident FinalRowsReport1b;
+drop table FinalRowsReport1a;
+drop table FinalRowsReport1b;
+
+let vQVDRowsReportCount  =num(NoOfRows('$(vRowsReportTableName)'));
+  let vQVDRowsReportInitial=num(LOOKUP('Initial','QVDName','$(vQVDRowsReportFileName)','$(vRowsReportTableName)'));
+  let vQVDRowsReportDelta=$(vQVDRowsReportCount)-$(vQVDRowsReportInitial);
+
+$(vRowsReportTableName)_FINAL:
+Noconcatenate Load
+*
+Resident $(vRowsReportTableName)
+Where QVDName<>'$(vQVDRowsReportFileName)';
+drop table $(vRowsReportTableName);
+
+Concatenate ($(vRowsReportTableName)_FINAL)
+Load
+*
+INLINE
+[QVDName                    ,Initial                  ,Final                  ,Delta
+ $(vQVDRowsReportFileName)  ,$(vQVDRowsReportInitial) ,$(vQVDRowsReportCount) ,$(vQVDRowsReportDelta)
+];
+
+
+  Store $(vRowsReportTableName)_FINAL into 'lib://$(vStorePathQVDRowsReport)';
+  drop table $(vRowsReportTableName)_FINAL;
+trace ******************exiting QVDAndSourceReports*******************;
+End Sub

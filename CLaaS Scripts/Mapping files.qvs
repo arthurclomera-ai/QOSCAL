@@ -1,0 +1,64 @@
+//***************************************************************************************************************************************************
+// Author: Art Clomera / Dom Dobson
+// Date: updated 04/23/2021
+// Company: IPKeys Technologies, LLC
+// Function: Mapping Load Script for CCI mappping to controls 
+//***************************************************************************************************************************************************
+
+//Build the the FROM statement appropriate for the file source. 
+//FROM statements comprise two parts, desgnated by vFROMA and vFROMB.
+  //vFROMA refers either to the local connection path or the SharePoint connector.  This doesn't change. (As long as all local files sourced in this section are in the same directory.) 
+  //vFROMB comprises the second part of the FROM statement that includes file types, etc.  This can change for each LOAD statement in this section:
+    //Therefore, multiple vFROMB variables are created and numbered sequentially (e.g. vFROMB01, vFROMB02...vFROMBNN)
+//The string 'SuffixClause' here is just a place holder.
+Sub MappingFiles (vProject)
+
+FromBRouter:
+NoConcatenate Load
+Designation,
+SuffixClause
+Resident GlobalFromBStatements
+Where FileType='Mapping';
+
+
+if $(vSourceSwitch)=0 then
+  //Local Source
+  let vFROMA='lib://$(vMappingfullpathlocal)';
+  Call GenerateFROMBs('$(vFROMB)','FromBRouter');
+else
+  //SharePoint source and Anything else, just to be thorough.
+  let vFROMA='lib://$(vSPConnector)/$(vLibraryEntityTypeName)/$(vMappingfolderpath)/$(vMappingfilename)';
+  Call GenerateFROMBs('$(vFROMB)','FromBRouter');
+End if // end if vSourceSwitch
+
+
+
+Mapping_Temp:
+LOAD
+    "index",
+    %Key_cci_item_21E7D19B5EDBDAAB
+
+FROM [$(vFROMA)]
+$(vFROMB01);
+
+right join
+LOAD
+	%Key_cci_item_21E7D19B5EDBDAAB,
+    id
+FROM [$(vFROMA)]
+$(vFROMB02);
+
+Control_Map:
+mapping 
+Load
+	id as CCI,
+    "index" as Control_Temp
+resident Mapping_Temp; 
+
+Drop table Mapping_Temp;
+
+
+  Call DropATable ('TEMPMappingFolder');
+  drop table FromBRouter;
+
+End Sub

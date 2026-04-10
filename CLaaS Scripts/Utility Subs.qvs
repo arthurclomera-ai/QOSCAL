@@ -1,0 +1,269 @@
+//***************************************************************************************************************************************************
+// Author: Dom Dobson and Art Clomera
+// Date: 11/26/2025 updated Version: v3.2.1.4
+// Company: IPKeys Technologies, LLC
+// Function: Convenience Sub Routines that are resused throughout the load script
+//***************************************************************************************************************************************************
+
+Sub DropATable (tablename)
+//Check whether a table exists and drop it if it does,
+  let vNoRows=ALT(NoOfRows('$(tablename)'),-1);
+  if '$(vNoRows)'<>-1 then
+    drop table $(tablename);  
+    trace Dropping Table $(tablename) with $(vNoRows) rows;
+  end if
+
+end sub
+
+Sub StoreATable (tablename, storepath, droptable)
+trace *******************entered sub StoreATable********************;
+trace tablename = $(tablename);
+//Check whether a table exists and store it as a QVD if it does.  Then drop the table if desired. 
+//PARAMETERS
+  //tablename - String: The name of hte table to be stored into a QVD
+  //storepath - String: The path where the QVD will be stored. 
+  //droptable - Number: (Optional) determines whether to drop tablename after storing it where:
+  //                    0: do not drop tablename
+  //                    1: drop tablename
+  //                    If not provided or invalid, then table will not be dropped
+
+  if ALT(NoOfRows('$(tablename)'),-1)<>-1 then
+    STORE [$(tablename)] into '$(storepath)';
+  end if
+  
+  if '$(droptable)'='1' then
+    call DropATable('$(tablename)');
+  end if
+end sub
+////////////////////
+////////END ROUTINE
+////////////////////
+
+////////////////////
+////////SUB ROUTINE
+////////////////////
+Sub CheckLocalFolder (fullpathlocal,countvariablename,tablename)
+
+Trace **************entering CheckLocalFolder ***************************
+Trace fullpathlocal: $(fullpathlocal);
+Trace countvariablename: $(countvariablename);
+Trace tablename: $(tablename);
+//Counts the number of files found at fullpathlocal and compiles their names into a table ascending by Name 
+//Parameters:
+  //fullpathlocal   : variable as string- one of previously-defined folder path variables (e.g. '$(vNessusfullpathlocal)') 
+  //countariablename: string - the desired name of the variable to be used as a counter for the number of files found at $(fullpathlocal) 
+  //tablename       : string - the desired name of the table to be generated to track the names of files found at $(fullpathlocal):
+
+  //OUTPUT:
+    //countvariablename: Number - the number of files found at the location designated by fullpathlocal
+      //E.g. - if the parameter countvariablename was input as "vMyCountVar", and three files were found then 
+             //this sub will output a variable vMyCountVar=3
+    //tablename : table: a table containing the files found.
+      //Contains two fileds:
+        //File: The full file path of the file,    e.g. "lib://$(Customer)/$(vProject)/[filepath]/filename.ext"
+        //Name: The clean file name from filepath  e.g. "filename.ext"
+      //E.g. - if the parameter tablename was input as "MyFileTable", then
+             //this sub will output a table MyFileTable containing  a fields "File" and "Name" with
+             //rows having values of 
+             //                     "lib://...file1.ext","file1.ext"
+             //                     "lib://...file2.ext","file2.ext"
+             //                     "lib://...file3.ext","file3.ext"  . . . and so forth
+    
+    //If no files are found, the table will still be returned with 0 rows. 
+//Basically, countariablename and tablename as OUTPUTS of this subroutine. The results will be consolidated into those two variables for use elsewhere in this script.  
+     
+//First, create tables in order to sort the files found at fullpathlocal in ascending Name order. 
+//This ensures files load in the same order whether they come from Local or SharePoint and assists with validation/troubleshooting.
+
+let $(countvariablename)=0;
+let vFoundfiles=chr(10)&chr(10)&'*******Files found in lib://$(fullpathlocal)';
+TEMPSort0:
+Noconcatenate Load 
+ *
+INLINE [Name,File];
+for each file in filelist ('lib://$(fullpathlocal)')
+  let $(countvariablename)=$($(countvariablename))+1;
+  call FileNameFromFilePath ('$(file)');   //Creates variable vFilenameclean
+
+  T2:
+  Concatenate LOAD 
+    *
+   INLINE [Name,File
+           $(vFilenameclean),$(file)];   
+             
+Next file 
+
+//$(tablename) is simply TEMPSort0 sorted by Name
+//The File column contains the lib:// references required to load the file.
+set vNameslist='';
+set vNameslist_clean='';
+
+if $($(countvariablename))>0 then
+$(tablename):
+Noconcatenate Load
+Name,
+File
+Resident TEMPSort0
+Order By Name;
+
+let $(countvariablename)=NoOfRows('$(tablename)');
+
+else //else of if $($(countvariablename))>0 then
+//If no files were found, create as empty table anyway
+$(tablename):
+Noconcatenate load
+*
+Resident TEMPSort0;
+
+end if //if $(countvariablename)>0 then
+
+Drop table TEMPSort0;
+Trace **************exiting CheckLocalFolder ***************************;
+End Sub // Sub CheckLocalFolder
+////////////////////
+////////END Subroutine
+////////////////////
+
+
+
+////////////////////
+////////SUBROUTINE
+////////////////////
+Sub QVDToTableAndUniqueSourceFiles (QVDTableName,FullPathQVD,FieldName)
+trace **************************************entering QVDToTableAndUniqueSourceFiles **********************;
+//Generates a table containing unique names of source files contained in a QVD
+//Parameters:
+  //QVDTableName     - the desired name for the table that will contain the unique source file names
+  //FullPathQVD      - the full path to the expected QVD
+                      //This will be ignored if vSourceSwitch=1 (i.e. Source files are on sharepoint)
+  //FieldName        - (Optional) the name of the field in the QVD containing source file names
+                      //If blank, then QVDTableName_UniqueSource will contain a default-named field and no rows. 
+//Output:
+  //Two tables, with names derived from the input QVDTableName:
+  //  QVDTableName              - A table containing all QVD Data and built by Load * from the existing QVD.  
+  //  QVDTableName_UniqueSource - A table with only the field identified by FieldName and continianng only unique values from that field (i.e. on instance of each value) 
+  //If no QVD exists, then the tables will contain only the default-named filed and no rows. 
+  
+      //EXAMPLES
+      //If QVDTableName="MyQVDTable" and FieldName="FileName", then this will return
+        //MyQVDTable              - containing all the QVD fields and data
+        //MyQVDTable_UniqueSource - containing only the field "FileName" with unique values
+      
+      //If QVDTableName="MyQVDTable" and FieldName is not provided, then this will return
+        //MyQVDTable              - containing all the QVD fields and data
+        //MyQVDTable_UniqueSource - containing only the default-named field and no rows. 
+      
+      //If no QVD is found at FullPathQVD
+        //MyQVDTable              - containing only the default-named field and no rows. 
+        //MyQVDTable_UniqueSource - containing only the default-named field and no rows. 
+        
+  //NOTE: if NO FieldName is provided, then table [QVDTableName]_UniqueSource WILL NOT be generated!
+
+
+Call CheckLocalFolder ('$(FullPathQVD)','vNumberofqvds','Qvdfilestable');
+//Use FieldName for FieldNameToUse if it was provided.  Otherwise, set FieldNameToUse to "X"
+if LEN('$(FieldName)')>0 then
+  let FieldNameToUse='$(FieldName)';
+  trace IF FieldNameToUse: $(FieldNameToUse);
+else
+  let FieldNameToUse='X';
+  trace ELSE FieldNameToUse: $(FieldNameToUse);
+end if
+
+ 
+if '$(vNumberofqvds)'>0 then //AND '$(vDemoMode)'=0 then
+trace **************entering if *********************line 218;
+  for filerow=0 to $(vNumberofqvds)-1;
+    let vFile=PEEK('File','$(filerow)','Qvdfilestable');  
+      $(QVDTableName):
+      Noconcatenate Load 
+      *
+      FROM ['$(vFile)']
+      (qvd);
+  next filerow
+
+else //else if 
+trace **************entering else *********************line 229;
+  //If no QVD was found, create an empty table with just DefaultDielfNameto return
+  $(QVDTableName):
+  Noconcatenate Load
+  *
+  INLINE [$(FieldNameToUse)];
+end if // if '$(vNumberofqvds)'>0  
+
+  //If a FieldName was provided, create the unique source table based on it
+  //Otherwise, create a table with a single field $(FieldNameToUse) and no rows
+//FIXED: If a FieldName was provided, create the unique source table based on it
+  //Otherwise, create a table with a single field $(FieldNameToUse) and no rows
+if LEN('$(FieldName)')>0 then
+  trace **************entering if *********************line 240;
+  trace FieldName: $(FieldName);
+  trace FieldNameToUse: $(FieldNameToUse);
+  trace vFile: $(vFile);
+  
+  //FIXED: Check if the field exists in the table before trying to load it
+  //This prevents errors when the field doesn't exist in the QVD
+  let vFieldExists = 0;
+  let vNumFields = NoOfFields('$(QVDTableName)');
+  for vFieldCheck = 1 to $(vNumFields)
+    let vThisField = FieldName($(vFieldCheck), '$(QVDTableName)');
+    if '$(vThisField)' = '$(FieldNameToUse)' then
+      let vFieldExists = 1;
+      vFieldCheck = $(vNumFields) + 1; // Exit the loop
+    end if
+  next vFieldCheck
+  
+  if $(vFieldExists) = 1 then
+    //Field exists, so we can load distinct values from it
+    $(QVDTableName)_UniqueSource:
+    Noconcatenate Load Distinct
+      [$(FieldNameToUse)]
+    Resident $(QVDTableName);
+  else
+    //Field doesn't exist, so create an empty table
+    trace **************Field $(FieldNameToUse) not found in $(QVDTableName) - creating empty table;
+    $(QVDTableName)_UniqueSource:
+    Noconcatenate Load
+    *
+    INLINE [$(FieldNameToUse)];
+  end if
+  
+else
+  trace **************entering else *********************line 246;
+    $(QVDTableName)_UniqueSource:
+    Noconcatenate Load
+    *
+    INLINE [$(FieldNameToUse)];
+end if  //if LEN('$(FieldName)')>0 then
+
+call DropATable ('Qvdfilestable');
+
+
+End Sub //QVDToTableAndUniqueSourceFiles
+////////////////////
+////////END Subroutine
+////////////////////
+
+//////////////////
+////////SUBROUTINE
+//////////////////
+Sub CreateSortTable (sourcetablename, sorttablename, sortcolumn)
+//Creates a TEMPSort Table from a source table.
+//The TEMPSort table contains the same data as the source table, but it is sorted by a designated column
+//Parameters:
+  //sourcetablename: The original table that is to be sorted
+  //sorttablename  : The desired name for the table with the sorted records
+  //sortcolumn     : The name of the column on which the sort will occur
+
+let vCreateSortTableNumRows=ALT(NoOfRows('$(sourcetablename)'),0);
+if (vCreateSortTableNumRows>0) then
+  $(sorttablename):
+  NoConcatenate Load
+  *
+  Resident $(sourcetablename)
+  Order By $(sortcolumn);
+end if
+End Sub //Sub CreateSortTable (sourcetablename, sorttablename, sortcolumn)
+//////////////////
+////////END Subroutine
+//////////////////

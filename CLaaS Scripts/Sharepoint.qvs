@@ -1,0 +1,788 @@
+//***************************************************************************************************************************************************
+// Author: Dom Dobson
+// Date: 04/23/2021
+// Company: IPKeys Technologies, LLC
+// Function: SharePoint load Script
+//***************************************************************************************************************************************************
+//////////////////
+////////SUBROUTINE
+//////////////////
+Sub ValidateSharePointLibrary (vsubsite,vlibraryname)
+//////////////////
+////////VALIDATE SHAREPOINT CONNECTION PATHS FOR THE SUBSITE AND LIBRARY. CREATE A LIST OF PROJECT FOLDERS IN THE LIBRARY
+//////////////////
+//Encode necessary portions of the subsite and library URIs
+//Call EncodeURI ('vSubsiteuri','$(vsubsite)')
+//Call EncodeURI ('vlibrarynameuri','$(vlibraryname)');
+
+let vFileerrmsg='';
+
+//Check for valid connector (SharePoint)
+//Check the SharePoint and SharePoint meta data connectors.
+//If an error occurs from teh LIB CONNECT TO statement, then the connector is bad or it is misidentified on the PARAMETERS table
+let vcheckerr=0;  //tracks whether an error related to the SP Connectors. If an error occurs this will be something > 0
+Set ErrorMode=0;
+LIB CONNECT TO '$(vSPConnector)';
+If ScriptError>0 then
+  let vcheckerr='$(vcheckerr)'+1;
+End if
+
+LIB CONNECT TO '$(vSPMetaConnector)';
+If ScriptError>0 then
+  let vcheckerr='$(vcheckerr)'+2;
+End if
+Set ErrorMode=1;
+/////UPDATED TO PLURAL
+trace ******* CHECKING SHAREPOINT CONNECTORS;
+If '$(vcheckerr)' > 0 then
+   let vFileerrmsg='****************** SHAREPOINT CONNECTOR ERROR****************'&chr(10)&
+                  '*                                                            *'&chr(10)&
+                  '*BAD SHAREPOINT CONNECTOR!                                   *'&chr(10)&
+                  '*Check whether the following variables are validly defined:  *'&chr(10)&
+                  '*   vSPConnector:     There must be an Office 365 SharePoint *'&chr(10)&
+                  '*                     Connector with matching name.          *'&chr(10)&
+                  '*   vSPMetaConnector: There must be an Office 365            *'&chr(10)&
+                  '*                     SharePoint Metadata Connector          *'&chr(10)&
+                  '*                     with matching name.                    *'&chr(10)&
+                  '**************************************************************';
+  trace $(vFileerrmsg);
+  Exit script;
+end if //If '$(vcheckerr)' > 0 then
+trace ******* SHAREPOINT CONNECTOR IS VALID;
+
+//Since the connectors are good, if an error occurs here, then the subsite reference is assumed to be bad
+let vcheckerr=0; //reset 
+Set ErrorMode=0;
+LIB CONNECT TO '$(vSPMetaConnector)';
+//TEMPAllLists will contain titles of all Lists/Libraries in the subsite
+TEMPAllLists:
+Noconcatenate LOAD
+	title as [Lists.title],
+    EntityTypeName as [Lists.EntityTypeName], //The EntityTypeName is the "permanent" List name that must be used in FROM statements to load documents
+    id as [Lists.id];
+SELECT title,
+       EntityTypeName,
+       id
+FROM Lists
+WITH PROPERTIES (subSite='$(vsubsite)');
+
+If ScriptError>0 then
+  let vcheckerr='$(vcheckerr)'+1;
+End if
+Set ErrorMode=1;
+
+trace *******vsubsite: CHECKING SITE FOR "$(vsubsite)";
+if '$(vcheckerr)'>0 then
+  let vFileerrmsg='****************** SHAREPOINT SUBSITE ERROR*************'&chr(10)&
+                  '*                                                      *'&chr(10)&
+                  '*ERROR ACCESSING SUBSITE                 .             *'&chr(10)&
+                  '*                                                      *'&chr(10)&
+                  '*Verify that the variable "vsubsite" refers to a       *'&chr(10)&
+                  '*valid site or subsite within the SharePoint site      *'&chr(10)&
+                  '*referenced in the O365 SharePoint connectors:         *'&chr(10)&
+                  '*                                                      *'&chr(10)&                  
+                  '*     $(vSPMetaConnector)'                               &chr(10)&
+                  '*     $(vSPConnector)'                                   &chr(10)&
+                  '***********************************************************';
+  trace $(vFileerrmsg);
+  Exit script;
+end if ;// if '$(vcheckerr)'>0 then
+
+TEMPCheckLibrary:
+Noconcatenate LOAD 
+  [Lists.title] as [Library.title],
+  [Lists.EntityTypeName] as [Library.EntityTypeName],
+  [Lists.id] as [Library.id]
+Resident TEMPAllLists
+Where match([Lists.title],'$(vlibraryname)');
+//There can only be one row in TEMPCheckLibrary, because there can only be one List with a given title
+let vLibraryID=PEEK('Library.id',0,'TEMPCheckLibrary');  //The id of the vlibraryname
+let vLibraryEntityTypeName = PEEK('Library.EntityTypeName',0,'TEMPCheckLibrary');  //The "permanent" name of the library that must be used in FROM statements
+If ALT(NoOfRows('TEMPCheckLibrary'),0)=0 then
+  let vFileerrmsg='****************** SHAREPOINT LIBRARY ERROR****************'&chr(10)&
+                  '*                                                         *'&chr(10)&
+                  '*LIBRARY "$(vlibraryname)" NOT FOUND!                      '&chr(10)&
+                  '*                                                         *'&chr(10)&
+                  '*Check that variable "vlibraryname" is validly defined.   *'&chr(10)&
+                  '*                                                         *'&chr(10)&
+                  '*Check that the target SharePoint site contains the       *'&chr(10)&
+                  '*library identified by the variable "vlibraryname".       *'&chr(10)&                  
+                  '***********************************************************';
+  trace $(vFileerrmsg);
+  Exit script;
+end if //If ALT(NoOfRows('TEMPCheckLibrary'),0)=0 then
+Drop table TEMPCheckLibrary;
+Drop table TEMPAllLists;
+trace *******vlibraryname: DONE CHECKING LIBRARIES FOR "$(vlibraryname)";
+
+
+
+
+
+
+//If vModeSwitch equals:
+  //0 then only the folder with name corresponding to vProject will be loaded.
+  //1 then all Project-level folders in vlibraryname will be loaded. 
+//Create a list of the Project-Level folders in the Library
+//This list will be itereated in the Dir Loader
+if $(vModeSwitch)=0 then
+  let vWhereArg = '[0.ContType] ='&chr(39)&'Folder'&chr(39)&' and [0.BaseName] ='&chr(39)&'$(vProject)'&chr(39);
+elseif $(vModeSwitch)=1 then
+  let vWhereArg = '[0.ContType] ='&chr(39)&'Folder'&chr(39)&' and [0.BaseName] <>'&chr(39)&'Forms'&chr(39);
+else
+  let vModeSwitchErrMsg='Invalid value for vModeSwitch!'&chr(10)&'Set vModeSwitch to 1 or 0!';
+  trace $(vModeSwitchErrMsg);
+  exit script;
+end if;//if $(vModeSwitch)=0 then
+LIB CONNECT TO '$(vSPMetaConnector)';
+//Grab everything in vlibraryname
+TEMPCheckProject0:
+Noconcatenate LOAD 
+  ID as [0.ID], 
+  BaseName as [0.BaseName],
+  ContentType as  [0.ContType];
+SELECT ID,
+       ContentType,
+       BaseName
+FROM ItemsFromList
+WITH PROPERTIES (subSite='$(vsubsite)',listId='$(vLibraryID)');
+
+//Now filter down to just the folders in vlibraryname
+TEMPCheckProject:
+Noconcatenate LOAD 
+  [0.ID] as [ID],
+  [0.BaseName] as [Name],
+  [0.ContType] as [ContType] 
+Resident TEMPCheckProject0
+//Where [0.ContType] ='Folder' and [0.BaseName]<>'Forms';
+Where $(vWhereArg);
+
+trace *******vProject: CHECKING LIBRARY "$(vlibraryname)" FOR PROJECT-LEVEL FOLDERS;
+let vNumRows=ALT(NoOfRows('TEMPCheckProject'),0);
+if $(vNumRows)=0 then
+  let vFileerrmsg='************** SHAREPOINT PROJECT FOLDER ERROR ***********'&chr(10)&
+                  '*                                                         *'&chr(10)&
+                  '*NO FOLDERS FOUND IN THIS LIBRARY!                        *'&chr(10)&
+                  '*                                                         *'&chr(10)&
+                  '*Verify that the library defined in "vlibraryname"        *'&chr(10)&
+                  '*is the desired target:                                   *'&chr(10)&
+                  '*                                                         *'&chr(10)&
+                  '*   $(vlibraryname)'                                        &chr(10)&
+                  '***********************************************************';
+  trace $(vFileerrmsg);
+  Exit script;
+end if ;// if $(vNumRows)=0 then
+Drop table TEMPCheckProject0;
+
+
+////////////////////
+//////Mapping
+////////////////////
+LIB CONNECT TO '$(vSPMetaConnector)';
+TEMPMappingFolder:
+Noconcatenate LOAD 
+	Name as [ListFiles.Name]; 
+SELECT 
+	Name
+FROM ListFiles
+WITH PROPERTIES (subSite='$(vsubsite)', folder='$(vsubsite)/$(vLibraryEntityTypeName)/$(vMappingfolderpath)');
+
+let vfindmappingfile=Len(lookup('ListFiles.Name','ListFiles.Name','$(vMappingfilename)','TEMPMappingFolder'));
+
+if '$(vfindmappingfile)' = 0 then
+  let vFileerrmsg='$(vFileerrmsg)'&chr(10)&
+                  '* - No mapping file found!'&chr(10)&
+                  '*   Check that directory exists and contains the named file.';      
+  trace $(vFileerrmsg);
+exit script
+end if// '$(vfindmappingfile)' = 0 then 
+End Sub  //ValidateSharePointLibrary
+//////////////////
+////////END Subroutine
+//////////////////
+
+
+//////////////////
+////////SUBROUTINE
+//////////////////
+
+Sub ValidateSharepointProject (vProject)
+//Prevent the script from crashing if a LOAD returns no rows.
+//For each table LOAD below, the LOAD will be attempted, then checked for errors.
+//Set ErrorMode=0;
+
+let vFoundProject=0;
+let vSkipProject =0;
+let vSelfdestruct=0;            
+let vFileerrmsg='*******FILE ERRORS*******';
+
+//The section below will attempt to build tables containing the files names and ids for each of the source folders.
+//The format for these table names is: $(vProject)TEMP[filetype]FolderFile where [filetype] is Nessus, SCAP, etc.
+
+//NOTE: If the designated source SharePoint folder is empty, the table Load will show an Internal Server Error.
+
+//All this means is that the SharePoint source folder is empty and the rest of the load script is designed accordingly.
+//There is no way to prevent this error other than ensuring some kind of junk file is in the SharePoint folder.
+//The junk file should not have a file name that can be confused with a real source file. 
+//An empty .txt file is probably the best thing to use for a Junk File.
+
+////////////////////
+//////Nessus
+////////////////////
+let vNessusFileTable=LOOKUP('SourceFilesTableName','FileType','Nessus','SourceFileRouter');  //e.g. Nessussourcefiles
+$(vNessusFileTable)_0:    //e.g. Program1Nessussourcefiles_0
+Noconcatenate LOAD 
+	Name as [TEMP.Name], 
+    UniqueId as [TEMP.UniqueId];
+SELECT 
+	Name,
+    UniqueId
+FROM ListFiles
+WITH PROPERTIES (subSite='$(vsubsite)', folder='$(vsubsite)/$(vLibraryEntityTypeName)/$(vProject)/$(vNessusfolderpath)');
+
+if Not IsNull(TableNumber('$(vNessusFileTable)_0')) then
+$(vNessusFileTable):      //e.g. Program1NEssussourcefiles
+Noconcatenate LOAD 
+	[TEMP.Name] as [Name],
+    [TEMP.UniqueId] as UniqueId
+Resident $(vNessusFileTable)_0
+Where wildmatch(TEMP.Name,'$(vNessusfilecriteria)');
+
+  let vNumberofnessusfiles =ALT(NoOfRows('$(vNessusFileTable)'),0);  
+  if Not IsNull(TableNumber('$(vNessusFileTable)')) then
+    Call CreateSortTable ('$(vNessusFileTable)', 'TEMPNessusSort', 'Name')
+    set vNessusfilenames='';
+    let vFoundfiles=chr(10)&'*******Nessus Files found in $(vlibraryname)/$(vProject)/$(vNessusfolderpath)';
+    for i=0 to $(vNumberofnessusfiles)-1
+      let vThisFileName=PEEK('Name',$(i),'TEMPNessusSort');
+      let vFoundfiles='$(vFoundfiles)'&chr(10)&'/$(vThisFileName)';
+      set vNessusfilenames=$(vNessusfilenames),'$(vThisFileName)';
+    Next i
+    trace $(vFoundfiles);
+    if $(vNumberofnessusfiles)>0 then
+      Call DropATable('TEMPNessusSort');
+    else 
+      Call DropATable('$(vNessusFileTable)');
+    end if
+  end if //if Not IsNull(TableNumber('$(vNessusFileTable)')) then
+end if //if Not IsNull(TableNumber('$$(vNessusFileTable)_0')) then
+Call DropATable('$(vNessusFileTable)_0');
+////////////////////
+//////Burp
+////////////////////
+let vBurpFileTable=LOOKUP('SourceFilesTableName','FileType','Burp','SourceFileRouter');  //e.g. Burpsourcefiles
+$(vBurpFileTable)_0:    
+Noconcatenate LOAD 
+	Name as [TEMP.Name],
+    UniqueId as [TEMP.UniqueId];
+SELECT 
+	Name,
+    UniqueId
+FROM ListFiles
+WITH PROPERTIES (subSite='$(vsubsite)', folder='$(vsubsite)/$(vLibraryEntityTypeName)/$(vProject)/$(vBurpfolderpath)');
+
+if Not IsNull(TableNumber('$(vBurpFileTable)_0')) then
+$(vBurpFileTable):      
+Noconcatenate LOAD 
+	[TEMP.Name] as [Name],
+    [TEMP.UniqueId] as UniqueId
+Resident $(vBurpFileTable)_0
+Where wildmatch(TEMP.Name,'$(vBurpfilecriteria)');
+
+  let vNumberofBurpfiles =ALT(NoOfRows('$(vBurpFileTable)'),0);  
+  if Not IsNull(TableNumber('$(vBurpFileTable)')) then
+    Call CreateSortTable ('$(vBurpFileTable)', 'TEMPBurpSort', 'Name')
+    set vBurpfilenames='';
+    let vFoundfiles=chr(10)&'*******Burp Files found in $(vlibraryname)/$(vProject)/$(vBurpfolderpath)';
+    for i=0 to $(vNumberofBurpfiles)-1
+      let vThisFileName=PEEK('Name',$(i),'TEMPBurpSort');
+      let vFoundfiles='$(vFoundfiles)'&chr(10)&'/$(vThisFileName)';
+      set vBurpfilenames=$(vBurpfilenames),'$(vThisFileName)';
+    Next i
+    trace $(vFoundfiles);
+    if $(vNumberofBurpfiles)>0 then
+      Call DropATable('TEMPBurpSort');
+    else 
+      Call DropATable('$(vBurpFileTable)');
+    end if
+  end if //if Not IsNull(TableNumber('$(vBurpFileTable)')) then
+end if //if Not IsNull(TableNumber('$(vBurpFileTable)_0')) then
+
+Call DropATable('$(vBurpFileTable)_0');
+
+////////////////////
+//////RHACS
+////////////////////
+let vRHACSFileTable=LOOKUP('SourceFilesTableName','FileType','RHACS','SourceFileRouter');  
+$(vRHACSFileTable)_0:    
+Noconcatenate LOAD 
+	Name as [TEMP.Name],
+    UniqueId as [TEMP.UniqueId]; 
+SELECT 
+	Name,
+    UniqueId
+FROM ListFiles
+WITH PROPERTIES (subSite='$(vsubsite)', folder='$(vsubsite)/$(vLibraryEntityTypeName)/$(vProject)/$(vRHACSfolderpath)');
+
+if Not IsNull(TableNumber('$(vRHACSFileTable)_0')) then
+$(vRHACSFileTable):      
+Noconcatenate LOAD 
+	[TEMP.Name] as [Name],
+    [TEMP.UniqueId] as UniqueId
+Resident $(vRHACSFileTable)_0
+Where wildmatch(TEMP.Name,'$(vRHACSfilecriteria)');
+
+  let vNumberofRHACSfiles =ALT(NoOfRows('$(vRHACSFileTable)'),0);  
+  if Not IsNull(TableNumber('$(vRHACSFileTable)')) then
+    Call CreateSortTable ('$(vRHACSFileTable)', 'TEMPRHACSSort', 'Name')
+    set vRHACSfilenames='';
+    let vFoundfiles=chr(10)&'*******RHACS Files found in $(vlibraryname)/$(vProject)/$(vRHACSfolderpath)';
+    for i=0 to $(vNumberofRHACSfiles)-1
+      let vThisFileName=PEEK('Name',$(i),'TEMPRHACSSort');
+      let vFoundfiles='$(vFoundfiles)'&chr(10)&'/$(vThisFileName)';
+      set vRHACSfilenames=$(vRHACSfilenames),'$(vThisFileName)';
+    Next i
+    trace $(vFoundfiles);
+    if $(vNumberofRHACSfiles)>0 then
+      Call DropATable('TEMPRHACSSort');
+    else 
+      Call DropATable('$(vRHACSFileTable)');
+    end if
+  end if //if Not IsNull(TableNumber('$(vRHACSFileTable)')) then
+end if //if Not IsNull(TableNumber('$(vRHACSFileTable)_0')) then
+
+Call DropATable('$(vRHACSFileTable)_0');
+////////////////////
+//////Prisma
+////////////////////
+let vPrismaFileTable=LOOKUP('SourceFilesTableName','FileType','Prisma','SourceFileRouter');  
+$(vPrismaFileTable)_0:    
+Noconcatenate LOAD 
+	Name as [TEMP.Name],
+    UniqueId as [TEMP.UniqueId]; 
+SELECT 
+	Name,
+    UniqueId
+FROM ListFiles
+WITH PROPERTIES (subSite='$(vsubsite)', folder='$(vsubsite)/$(vLibraryEntityTypeName)/$(vProject)/$(vPrismafolderpath)');
+
+if Not IsNull(TableNumber('$(vPrismaFileTable)_0')) then
+$(vPrismaFileTable):      
+Noconcatenate LOAD 
+	[TEMP.Name] as [Name],
+    [TEMP.UniqueId] as UniqueId
+Resident $(vPrismaFileTable)_0
+Where wildmatch(TEMP.Name,'$(vPrismafilecriteria)');
+
+  let vNumberofPrismafiles =ALT(NoOfRows('$(vPrismaFileTable)'),0);  
+  if Not IsNull(TableNumber('$(vPrismaFileTable)')) then
+    Call CreateSortTable ('$(vPrismaFileTable)', 'TEMPPrismaSort', 'Name')
+    set vPrismafilenames='';
+    let vFoundfiles=chr(10)&'*******Prisma Files found in $(vlibraryname)/$(vProject)/$(vPrismafolderpath)';
+    for i=0 to $(vNumberofPrismafiles)-1
+      let vThisFileName=PEEK('Name',$(i),'TEMPPrismaSort');
+      let vFoundfiles='$(vFoundfiles)'&chr(10)&'/$(vThisFileName)';
+      set vPrismafilenames=$(vPrismafilenames),'$(vThisFileName)';
+    Next i
+    trace $(vFoundfiles);
+    if $(vNumberofPrismafiles)>0 then
+      Call DropATable('TEMPPrismaSort');
+    else 
+      Call DropATable('$(vPrismaFileTable)');
+    end if
+  end if //if Not IsNull(TableNumber('$(vPrismaFileTable)')) then
+end if //if Not IsNull(TableNumber('$(vPrismaFileTable)_0')) then
+
+Call DropATable('$(vPrismaFileTable)_0');
+////////////////////
+//////Inspector
+////////////////////
+let vInspectorFileTable=LOOKUP('SourceFilesTableName','FileType','Inspector','SourceFileRouter');  
+$(vInspectorFileTable)_0:    
+Noconcatenate LOAD 
+	Name as [TEMP.Name],
+    UniqueId as [TEMP.UniqueId]; 
+SELECT 
+	Name,
+    UniqueId
+FROM ListFiles
+WITH PROPERTIES (subSite='$(vsubsite)', folder='$(vsubsite)/$(vLibraryEntityTypeName)/$(vProject)/$(vInspectorfolderpath)');
+
+if Not IsNull(TableNumber('$(vInspectorFileTable)_0')) then
+$(vInspectorFileTable):      
+Noconcatenate LOAD 
+	[TEMP.Name] as [Name],
+    [TEMP.UniqueId] as UniqueId
+Resident $(vInspectorFileTable)_0
+Where wildmatch(TEMP.Name,'$(vInspectorfilecriteria)');
+
+  let vNumberofInspectorfiles =ALT(NoOfRows('$(vInspectorFileTable)'),0);  
+  if Not IsNull(TableNumber('$(vInspectorFileTable)')) then
+    Call CreateSortTable ('$(vInspectorFileTable)', 'TEMPInspectorSort', 'Name')
+    set vInspectorfilenames='';
+    let vFoundfiles=chr(10)&'*******Inspector Files found in $(vlibraryname)/$(vProject)/$(vInspectorfolderpath)';
+    for i=0 to $(vNumberofInspectorfiles)-1
+      let vThisFileName=PEEK('Name',$(i),'TEMPInspectorSort');
+      let vFoundfiles='$(vFoundfiles)'&chr(10)&'/$(vThisFileName)';
+      set vInspectorfilenames=$(vInspectorfilenames),'$(vThisFileName)';
+    Next i
+    trace $(vFoundfiles);
+    if $(vNumberofInspectorfiles)>0 then
+      Call DropATable('TEMPInspectorSort');
+    else 
+      Call DropATable('$(vInspectorFileTable)');
+    end if
+  end if //if Not IsNull(TableNumber('$(vInspectorFileTable)')) then
+end if //if Not IsNull(TableNumber('$(vInspectorFileTable)_0')) then
+
+Call DropATable('$(vInspectorFileTable)_0');
+////////////////////
+//////CheckList
+////////////////////
+let vChecklistSourceFileTable=LOOKUP('SourceFilesTableName','FileType','CheckList','SourceFileRouter');  //e.g. Checklistsourcefiles
+$(vChecklistSourceFileTable)_0:
+Noconcatenate LOAD 
+	Name as [TEMP.Name],
+    UniqueId as [TEMP.UniqueId]; 
+SELECT 
+	Name,
+    UniqueId
+FROM ListFiles
+WITH PROPERTIES (subSite='$(vsubsite)', folder='$(vsubsite)/$(vLibraryEntityTypeName)/$(vProject)/$(vChecklistfolderpath)');
+
+if Not IsNull(TableNumber('$(vChecklistSourceFileTable)_0')) then
+$(vChecklistSourceFileTable):
+Noconcatenate LOAD 
+	[TEMP.Name] as [Name],
+    [TEMP.UniqueId] as UniqueId
+Resident $(vChecklistSourceFileTable)_0
+Where wildmatch(TEMP.Name,'$(vChecklistfilecriteria)');
+
+  let vNumberofcklfiles=ALT(NoOfRows('$(vChecklistSourceFileTable)'),0);
+
+  if Not IsNull(TableNumber('$(vChecklistSourceFileTable)')) then
+    Call CreateSortTable ('$(vChecklistSourceFileTable)', 'TEMPChecklistSort', 'Name');
+
+    set vChecklistfilenames='';
+    let vFoundfiles=chr(10)&'*******Checklist Files found in $(vlibraryname)/$(vProject)/$(vChecklistfolderpath)';
+    for i=0 to $(vNumberofcklfiles)-1
+      let vThisFileName=PEEK('Name',$(i),'TEMPChecklistSort');
+      let vFoundfiles='$(vFoundfiles)'&chr(10)&'/$(vThisFileName)';  
+    set vChecklistfilenames=$(vChecklistfilenames),'$(vThisFileName)';
+    Next i
+    trace $(vFoundfiles); 
+    if $(vNumberofcklfiles)>0 then
+      Call DropATable('TEMPChecklistSort');
+    else 
+      Call DropATable('$(vChecklistSourceFileTable)');
+    end if
+  end if //if Not IsNull(TableNumber('$(vChecklistSourceFileTable)')) then
+end if //if Not IsNull(TableNumber('$(vChecklistSourceFileTable)_0'))
+Call DropATable('$(vChecklistSourceFileTable)_0');
+
+
+////////////////////
+//////SCAP
+////////////////////
+let vSCAPSourceFileTable=LOOKUP('SourceFilesTableName','FileType','SCAP','SourceFileRouter');  //e.g. SCAPsourcefiles
+$(vSCAPSourceFileTable)_0:
+Noconcatenate LOAD 
+	Name as [TEMP.Name],
+    UniqueId as [TEMP.UniqueId]; 
+SELECT 
+	Name,
+    UniqueId
+FROM ListFiles
+WITH PROPERTIES (subSite='$(vsubsite)', folder='$(vsubsite)/$(vLibraryEntityTypeName)/$(vProject)/$(vSCAPfolderpath)');
+
+if Not IsNull(TableNumber('$(vSCAPSourceFileTable)_0')) then
+$(vSCAPSourceFileTable):
+Noconcatenate LOAD 
+	[TEMP.Name] as [Name],
+    [TEMP.UniqueId] as UniqueId
+Resident $(vSCAPSourceFileTable)_0
+Where wildmatch(TEMP.Name,'$(vSCAPfilecriteria)');
+
+  let vNumberofscapfiles   =ALT(NoOfRows('$(vSCAPSourceFileTable)'),0);
+
+  if Not IsNull(TableNumber('$(vSCAPSourceFileTable)')) then
+    Call CreateSortTable ('$(vSCAPSourceFileTable)', 'TEMPSCAPSort', 'Name')
+    set vSCAPfilenames='';
+    let vFoundfiles=chr(10)&'*******SCAP Files found in $(vlibraryname)/$(vProject)/$(vSCAPfolderpath)';
+    for i=0 to $(vNumberofscapfiles)-1
+      let vThisFileName=PEEK('Name',$(i),'TEMPSCAPSort');
+      let vFoundfiles='$(vFoundfiles)'&chr(10)&'/$(vThisFileName)';  
+    set vSCAPfilenames=$(vSCAPfilenames),'$(vThisFileName)';   
+    Next i
+    Call DropATable('TEMPSCAPSort');
+    trace $(vFoundfiles); 
+  end if //if Not IsNull(TableNumber('$(vSCAPSourceFileTable)')) then
+end if //if Not IsNull(TableNumber('$(vSCAPSourceFileTable)_0'))
+Call DropATable('$(vSCAPSourceFileTable)_0');
+
+////////////////////
+//////Fortify
+////////////////////
+Call BuildFolderURLIS('vFortifyURLIS','$(vProject)/$(vFortifyfolderpath)');
+
+//STD SMRY Files
+let vFortXMLSourceFileTable=LOOKUP('SourceFilesTableName','FileType','FortifyXML','SourceFileRouter');  //e.g. FortifyXMLsourcefiles
+$(vFortXMLSourceFileTable)_0:
+Noconcatenate LOAD 
+	Name as [TEMP.Name],
+    UniqueId as [TEMP.UniqueId]; 
+SELECT 
+	Name,
+    UniqueId
+FROM ListFiles
+WITH PROPERTIES (subSite='$(vsubsite)', folder='$(vsubsite)/$(vLibraryEntityTypeName)/$(vProject)/$(vFortifyfolderpath)');
+
+if Not IsNull(TableNumber('$(vFortXMLSourceFileTable)_0')) then
+$(vFortXMLSourceFileTable):
+Noconcatenate LOAD 
+	[TEMP.Name] as [Name],
+    [TEMP.UniqueId] as UniqueId
+Resident $(vFortXMLSourceFileTable)_0
+Where wildmatch(TEMP.Name,'$(vFortifyXMLfilecriteria)');
+
+  let vNumberoffortifyXMLfiles=ALT(NoOfRows('$(vFortXMLSourceFileTable)'),0);
+
+  if Not IsNull(TableNumber('$(vFortXMLSourceFileTable)')) then
+    Call CreateSortTable ('$(vFortXMLSourceFileTable)', 'TEMPFortifyXMLSort', 'Name');
+    set vFortifyxmlfilenames='';
+    let vFoundfiles=chr(10)&'*******Fortify XML (non-STIG) Files found in $(vlibraryname)/$(vProject)/$(vFortifyfolderpath)';
+    for i=0 to $(vNumberoffortifyXMLfiles)-1
+      let vThisFileName=PEEK('Name',$(i),'TEMPFortifyXMLSort');//FolderStdSmrySrcFiles');
+      if not(wildmatch('$(vThisFileName)','$(vFortifySTIGfilecriteria)')) then //Do not add file names that also match the STIG criteria. They are tracked separately in the next section
+        let vFoundfiles='$(vFoundfiles)'&chr(10)&'/$(vThisFileName)';
+      else //Otherwise, this file name matches the STIG criteria, so deduct 1 from vNumberoffortifyXMLfiles to avoid double counting in the final trace message.  
+        let vNumberoffortifyXMLfiles = '$(vNumberoffortifyXMLfiles)'-1; //Remove STIG from 
+      end if 
+    set vFortifyxmlfilenames=$(vFortifyxmlfilenames),'$(vThisFileName)';
+    Next i
+    Call DropATable('TEMPFortifyXMLSort');
+    trace $(vFoundfiles); 
+  end if //if IsNull(TableNumber('$(vFortXMLSourceFileTable)'))=-1 then
+end if //if Not IsNull(TableNumber('$(vFortXMLSourceFileTable)_0'))
+
+//SRC Files
+let vFortSTIGSourceFileTable=LOOKUP('SourceFilesTableName','FileType','FortifySTIG','SourceFileRouter');  //e.g. FortifySTIGsourcefiles
+$(vFortSTIGSourceFileTable)_0:
+Noconcatenate LOAD 
+	Name as [TEMP.Name],
+    UniqueId as [TEMP.UniqueId];
+SELECT 
+	Name,
+    UniqueId
+FROM ListFiles
+WITH PROPERTIES (subSite='$(vsubsite)', folder='$(vsubsite)/$(vLibraryEntityTypeName)/$(vProject)/$(vFortifyfolderpath)');
+
+if Not IsNull(TableNumber('$(vFortSTIGSourceFileTable)_0')) then
+$(vFortSTIGSourceFileTable):
+Noconcatenate LOAD 
+	[TEMP.Name] as [Name],
+    [TEMP.UniqueId] as UniqueId
+Resident $(vFortSTIGSourceFileTable)_0
+Where wildmatch(TEMP.Name,'$(vFortifySTIGfilecriteria)');
+
+  let vNumberoffortifySTIGfiles=ALT(NoOfRows('$(vFortSTIGSourceFileTable)'),0);
+  
+  if Not IsNull(TableNumber('$(vFortSTIGSourceFileTable)')) then
+    Call CreateSortTable ('$(vFortSTIGSourceFileTable)', 'TEMPFortifySTIGSort', 'Name')
+    set vFortifystigfilenames='';
+    let vFoundfiles=chr(10)&'*******Fortify STIG Files found in $(vlibraryname)/$(vProject)/$(vFortifyfolderpath)';
+    for i=0 to $(vNumberoffortifySTIGfiles)-1
+      let vThisFileName=PEEK('Name',$(i),'TEMPFortifySTIGSort');
+      let vFoundfiles='$(vFoundfiles)'&chr(10)&'/$(vThisFileName)'; 
+    set vFortifystigfilenames=$(vFortifystigfilenames),'$(vThisFileName)';
+    Call DropATable('TEMPFortifySTIGSort');
+    Next i
+    trace $(vFoundfiles);
+  end if //if Not IsNull(TableNumber('$(vFortSTIGSourceFileTable)')) then
+end if //if Not IsNull(TableNumber('$(vFortSTIGSourceFileTable)0'))
+
+//If Fortify Src files are found, but no Fortify Std Smry, then the Fortify section will crash.
+//However, the Fortify section can run if the inverse is true.
+//Therefore, if no Fortify Std Smry files are found, the Forify section must be skipped.
+Call DropATable('$(vFortXMLSourceFileTable)_0');
+Call DropATable('$(vFortSTIGSourceFileTable)_0');
+//If no Fortify Std Smry files are found, then add a disclaimer to the vFilereport message below and set vSkipfortify=1.  
+let vSkipfortify=0;
+let vFortifydisclaimer='';
+if $(vNumberoffortifyXMLfiles)=0 then
+  let vSkipfortify=1;
+  let vFortifydisclaimer='**FORTIFY SECTION WILL BE SKIPPED**'&chr(10);
+end if // if $(vNumberoffortifyXMLfiles)=0 then
+
+
+//Total up all file counts
+let vTotalfilesfound=$(vNumberofnessusfiles)+$(vNumberofcklfiles)+$(vNumberofscapfiles)+$(vNumberoffortifySTIGfiles)+$(vNumberoffortifyXMLfiles);
+
+
+let vFilereport='NUMBER OF SHAREPOINT FILES FOUND IN $(vProject):'&chr(10)&
+      'Nessus-------: $(vNumberofnessusfiles)'     &chr(10)&
+      'Burp XML     : $(vNumberofBurpfiles)'       &chr(10)&
+      'RHACS--------: $(vNumberofRHACSfiles)'      &chr(10)&
+      'Prisma       : $(vNumberofPrismafiles)'     &chr(10)&
+      'Inspector----: $(vNumberofInspectorfiles)'  &chr(10)&
+      'CheckList    : $(vNumberofcklfiles),'       &chr(10)&
+      'SCAP---------: $(vNumberofscapfiles),'      &chr(10)&
+      'Fortify XML  : $(vNumberoffortifyXMLfiles),'&chr(10)&
+      'Fortify STIG-: $(vNumberoffortifySTIGfiles)'&chr(10)&
+      '$(vFortifydisclaimer)'&
+      '-----------------------------'                 &chr(10)&
+      'TOTAL        : $(vTotalfilesfound)';
+trace $(vFilereport);
+
+//If the total number files = 0, add a note to the error message and set Skip Project
+if $(vTotalfilesfound)=0 then
+let vFileerrmsg='$(vFileerrmsg)'&chr(10)&'* - No source files were found for Project $(vProject)!'&chr(10)&
+                                           '*   Check that directories exist and they contain files. ';
+trace $(vFileerrmsg);
+end if //if $(vTotalfilesfound)- then
+
+//Reset ErrorMode to 1
+Set ErrorMode=1;
+
+
+
+//end if //if $(vSourceSwitch)=1 then
+
+end Sub //ValidateSharepointProject (vProject)
+//////////////////
+////////END Subroutine
+//////////////////
+
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////SUBROUTINE
+//////////////////////////////////////////////////////////////////////////////////////////////////////////
+Sub SharePointPaths (vProject)
+
+Temp_RecordsWithSourceFileTableKeys:  //Only the rows in QVDFilesRouter with a value in the SourceFileRouterKey column
+NoConcatenate LOAD
+*
+Resident QVDFilesRouter
+Where LEN(SourceFileRouterKey)>0;
+
+Temp_SourceFileTableInfo:            //Only the rows in SourceFileRouter with a value in the SourceFilesTableName column
+Noconcatenate Load
+FileType,
+SourceFilesTableName,
+SourceFileCountVariableName
+Resident SourceFileRouter
+Where LEN(SourceFilesTableName)>0;
+
+for sourcefiletable=0 to NoOfRows('Temp_SourceFileTableInfo')-1
+  let vThisFileType           =PEEK('FileType'                   ,$(sourcefiletable) ,'Temp_SourceFileTableInfo'); //e.g. Nessus
+  let vThisSourceFileTableName=PEEK('SourceFilesTableName'       ,$(sourcefiletable) ,'Temp_SourceFileTableInfo'); //e.g. Nessusfileslocal       
+  let vThisFileCountVarName   =PEEK('SourceFileCountVariableName',$(sourcefiletable) ,'Temp_SourceFileTableInfo'); //e.g. vNumberofnessusfiles
+next sourcefiletable
+
+Call DropATable('Temp_SourceFileTableInfo');
+
+//Create a table containing only the names of those source files to be added to each QVD
+//Determine initial number of rows in each existing QVD
+
+for qvdrouterrow=0 to NoOfRows('Temp_RecordsWithSourceFileTableKeys')-1
+  let vThisType            =PEEK('FileType'            ,'$(qvdrouterrow)','Temp_RecordsWithSourceFileTableKeys');  //e.g. NessusPPSM
+  let vThisFilesToAddTable =PEEK('SourceFilesToAdd'    ,'$(qvdrouterrow)','Temp_RecordsWithSourceFileTableKeys');  //e.g. NessusFilesToAdd
+  let vThisSourceFileKey   =PEEK('SourceFileRouterKey' ,'$(qvdrouterrow)','Temp_RecordsWithSourceFileTableKeys');  //e.g. "Nessus" or "FortifySTIG,FortifyXML" (without quotes)
+  let vThisQVDTableName    =PEEK('QVDTableName'        ,'$(qvdrouterrow)','Temp_RecordsWithSourceFileTableKeys');   //e.g. NessusSoftwareQVDTable
+    let $(vThisQVDTableName)  ='$(vThisQVDTableName)';                                  //e.g. let NessusSoftwareQVDTable='NessusSoftwareQVDTable'; The variable name matches its value.
+  let vThisStorePath       =LOOKUP('StorePath'   ,'FileType','$(vThisType)','StorePaths');                         //e.g. Connector/IPKeys (DEMO)/Program1/QVD/NessusPPSM.QVD
+  let vThisQVDName         =LOOKUP('QVDFileName' ,'FileType','$(vThisType)','StorePaths');                        //e.g. NessusPPSM.QVD  
+  let vThisQVDSourceNameField=LOOKUP('SourceNameField' ,'FileType','$(vThisType)','QVDFilesRouter');  //e.g. File_Ckl 
+  let vThisSourceFilesTableName=LOOKUP('SourceFilesTableName','FileType','$(vThisSourceFileKey)','SourceFileRouter'); //e.g. Nessussourcefiles
+
+  //Do not run QVDToTableAndUniqueSourceFiles in DEMO mode. 
+  //This section is used to determine what new source files need to be incoporated into the existing QVD, if there is one. 
+  //In DEMO Mode, all QVDs are rewriten from scratch. The "New" files table is just set to match the All local files table (e.g. NessusFilesToAdd is just set to Nessusfilesloca)
+
+if '$(vDemoSwitch)'=0 then
+     Call QVDToTableAndUniqueSourceFiles ('$(vThisQVDTableName)','$(vThisStorePath)','$(vThisQVDSourceNameField)'); 
+     //If there is an existing QVD for this file type, then $(vThisQVDTableName) will have rows. 
+     //If so, execute the following to create a table containing JUST THE FILES TO BE ADDED
+     //$(vThisQVDTableName) will be used in the appropriate File Type section (Nessus, SCAP, etc)
+     if NoOfRows('$(vThisQVDTableName)_UniqueSource')>0 then //If there is a QVD table with rows
+       //TempCompare contains the names of source files that are already included in the QVD
+       //Mirror the $(vThisQVDTableName)_UniqueSource changing the name of the gile name column to SourceFilesAlreadyLoaded for comparison
+       TempCompare:                            
+       LOAD Distinct
+       $(vThisQVDSourceNameField) as SourceFilesAlreadyLoaded
+       Resident $(vThisQVDTableName)_UniqueSource;
+
+         $(vThisFilesToAddTable):
+         Noconcatenate Load
+         *
+         Resident $(vThisSourceFilesTableName)
+         Where NOT EXISTS(SourceFilesAlreadyLoaded,Name);
+
+    elseif Not isnull(TableNumber('$(vThisSourceFilesTableName)')) then   // of if NoOfRows('$(vThisQVDTableName)_UniqueSource')>0; If $(vThisSourceFilesTableName) actually exists then
+        //Otherwise, there is no existing QVD and so ALL source files must be used. 
+          $(vThisFilesToAddTable):
+          Noconcatenate Load
+          *
+          Resident $(vThisSourceFilesTableName);
+    End If //     if NoOfRows('$(vThisQVDTableName)_UniqueSource')>0  then
+    Call DropATable('TempCompare');     
+  
+
+   elseif Not isnull(TableNumber('$(vThisSourceFilesTableName)')) then //else of if '$(vDemoSwitch)'=0 then  If $(vThisSourceFilesTableName) actually exists then
+    //Otherwise, vDEMOSwitch=1 and so:
+    //In DEMO mode, all QVDs get rewritten from scratch every time. 
+    //The "FilesToAdd" table must contain all local source files. 
+   $(vThisFilesToAddTable):
+    Noconcatenate Load
+    *
+    Resident $(vThisSourceFilesTableName);
+  end if //if '$(vDemoSwitch)'=0 then  
+
+  let vInitialLines=NoOfRows('$(vThisQVDTableName)');
+  if LEN('$(vInitialLines)')=0 then 
+    let vInitialLines='0';
+  end if;
+  Concatenate ($(vRowsReportTableName))
+  load
+  *
+  Inline [QVDName         ,Initial
+          $(vThisQVDName) ,$(vInitialLines)]; 
+next qvdrouterrow
+
+//The following variables contain names of New file tables (format is AAA_FilesToAdd) and Number of rows they contain. To be used in each load section. 
+let vNessusNewSourceFiles  =LOOKUP('SourceFilesToAdd','FileType','Nessus','QVDFilesRouter');  //e.g. NessusFilesToAdd - created in the Path Subroutine
+let vNumberOfNewNessusFiles=ALT(NoOfRows('$(vNessusNewSourceFiles)'),-1);
+
+let vFortifySTIGNewSourceFiles  =LOOKUP('SourceFilesToAdd','FileType','FortifyVulnerabilities','QVDFilesRouter');  //e.g. FortifyVulnerabilitiesFilesToAdd - created in the Path Subroutine
+let vNumberOfNewFortifySTIGFiles=ALT(NoOfRows('$(vFortifySTIGNewSourceFiles)'),-1);
+
+let vFortifyXMLNewSourceFiles  =LOOKUP('SourceFilesToAdd','FileType','FortifyStandardCounts','QVDFilesRouter');  //e.g. FortifyStandardCountsFilesToAdd - created in the Path Subroutine
+let vNumberOfNewFortifyXMLFiles =ALT(NoOfRows('$(vFortifyXMLNewSourceFiles)'),-1);
+
+let vBurpNewSourceFiles  =LOOKUP('SourceFilesToAdd','FileType','Burp','QVDFilesRouter');  //e.g. BurpFilesToAdd - created in the Path Subroutine
+let vNumberOfNewBurpFiles =ALT(NoOfRows('$(vBurpNewSourceFiles)'),-1);
+
+let vRHACSNewSourceFiles  =LOOKUP('SourceFilesToAdd','FileType','RHACS','QVDFilesRouter');  //e.g. RHACSFilesToAdd - created in the Path Subroutine
+let vNumberOfNewRHACSFiles =ALT(NoOfRows('$(vRHACSNewSourceFiles)'),-1);
+
+let vPrismaNewSourceFiles  =LOOKUP('SourceFilesToAdd','FileType','Prisma','QVDFilesRouter');  //e.g. PrismaFilesToAdd - created in the Path Subroutine
+let vNumberOfNewPrismaFiles =ALT(NoOfRows('$(vPrismaNewSourceFiles)'),-1);
+
+let vInspectorNewSourceFiles  =LOOKUP('SourceFilesToAdd','FileType','Inspector','QVDFilesRouter');  //e.g. InspectorFilesToAdd - created in the Path Subroutine
+let vNumberOfNewInspectorFiles =ALT(NoOfRows('$(vInspectorNewSourceFiles)'),-1);
+
+let vCheckListNewSourceFiles  =LOOKUP('SourceFilesToAdd','FileType','CheckList','QVDFilesRouter');  //e.g. CHecklistFilesToAdd - created in the Path Subroutine
+let vNumberOfNewCheckListFiles  =ALT(NoOfRows('$(vCheckListNewSourceFiles)'),-1);
+
+let vSCAPNewSourceFiles  =LOOKUP('SourceFilesToAdd','FileType','SCAP','QVDFilesRouter');   //e.g. SCAPFilesToAdd - created in the Path Subroutine
+let vNumberOfNewSCAPFiles  =ALT(NoOfRows('$(vSCAPNewSourceFiles)'),-1);
+
+
+Call DropATable('Temp_RecordsWithSourceFileTableKeys');
+
+
+//////////////////
+////////END Subroutine
+//////////////////
+End Sub //SharePointPaths (vProject)

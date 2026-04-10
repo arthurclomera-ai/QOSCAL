@@ -1,0 +1,12 @@
+////////////////////
+////////SUB ROUTINE
+////////////////////
+Sub FileNameFromFilePath (FilePath)
+//Creates 
+  let vFilenameindex=index('$(FilePath)','/',-1);
+  let vFilename     =mid('$(FilePath)',$(vFilenameindex));
+  let vFilenameclean=mid('$(FilePath)',$(vFilenameindex)+1);
+End Sub //Sub FileNameFromFilePath (FilePath)
+////////////////////
+////////END ROUTINE
+////////////////////

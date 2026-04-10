@@ -1,0 +1,28 @@
+////////////////////
+////////SUB ROUTINES
+////////////////////
+Sub EncodeURI (outputvarname,string)
+//Encodes a string by replacing designated characters. 
+//Additional encoding can be performed by adding additional replace( statements. 
+//Parameters:
+  //outputvarname: The desired variable to be created for the encoded string.
+  //string       : The string to be encoded. 
+  let encodedstring=replace(replace('$(string)',' ','+'),'/','%2f');
+  let $(outputvarname)=replace(replace('$(string)',' ','+'),'/','%2f');
+End Sub
+
+Sub BuildFolderURLIS(outputvarname,folderpath)
+//Create a URL IS statement to return a list of the files in a SharePoint folder.
+//This subroutine takes a folder path and builds an encoded URL portion for a LOAD URL IS statement.
+//The encoded URL is then returned in as the desired variable
+//The URL IS statements built by this subroutine are for LOADing a list of files in a folder.
+//Parameters
+  //outputvarname: The desired variable to be created for the encoded string.
+  //folderpath   : The SharePoint folder path starting with the first folder in the library.
+  let vFullfolderpath   ='$(vsubsite)/$(vlibraryname)/$(folderpath)';
+  Call EncodeURI ('vFullfolderpathenc','$(vFullfolderpath)');
+  let $(outputvarname)='$(vSPConnect)/data?connectorID=Office365Connector&table=ListFiles&subSite=$(vSubsiteuri)&folder=$(vFullfolderpathenc)&maxResults=1100&appID=&loadAccessToken=$(vToken)';
+End Sub
+////////////////////
+////////End SUBROUTINES
+////////////////////

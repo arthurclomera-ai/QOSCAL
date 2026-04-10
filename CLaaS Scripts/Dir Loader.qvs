@@ -1,0 +1,123 @@
+Sub MakeCalls (vProject)
+    call Nessus (vProject)
+	call Checklist (vProject)
+	call Fortify (vProject)
+    call Burp (vProject)
+    call RHACS (vProject)
+    call Prisma (vProject)
+    call Inspector (vProject)
+//	call Scap (vProject)
+End Sub
+
+//Check that the vCustomer folder exists (local)
+if $(vSourceSwitch)=0 then 
+  //Determine whether to cycle through all project directories or just a single project directory
+  if $(vModeSwitch)=0 then
+    let vDirectoryList='lib://$(vConnection)/$(vCustomer)/$(vProject)';
+  elseif $(vModeSwitch)=1 then
+    let vDirectoryList='lib://$(vConnection)/$(vCustomer)/*';
+  else
+   let vModeSwitchErrMsg='Invalid value for vModeSwitch!'&chr(10)&'Set vModeSwitch to 1 or 0!';
+  trace $(vModeSwitchErrMsg);
+  exit script;
+  end if; //if $(vModeSwitch)=0 then
+  Call PathValidation;
+  //Load Mapping File
+  //This only happens once, even in Enterprise Mode.
+ call MappingFiles;
+let vfound=0;   //tracks number of all directories found
+let vprojs=0;   //tracks number of actual project directories found
+for each dir in dirlist('$(vDirectoryList)');
+	let vfound=$(vfound)+1;
+	let vnameindex=index('$(dir)','/',-1);
+	let vname=mid('$(dir)',$(vnameindex)+1);  
+	trace $(vfound). $(vname);
+	//Skip any admin or reference folders that start with "_"
+    IF  index('$(vname)','_')<>1 and LEN ('$(vname)')>0 then
+      let vprojs=$(vprojs)+1;  
+      call QVDStorePaths (vname);
+      call LocalPaths (vname);
+      call MakeCalls (vname)
+      call QVDAndSourceReports;      
+    End if;
+
+//Drop all the source file tables
+  for i=0 to '$(vQVDFileRouterRows)'-1
+  let vThisFilesToAddTable =PEEK('SourceFilesToAdd'   ,'$(i)','QVDFilesRouter');
+  let vThisSourceFilesKey  =PEEK('SourceFileRouterKey','$(i)','QVDFilesRouter');
+  let vThisSourceFilesTable=LOOKUP('SourceFilesTableName','FileType','$(vThisSourceFilesKey)','SourceFileRouter');
+  call DropATable('$(vThisSourceFilesTable)');
+  call DropATable('$(vThisFilesToAddTable)');
+//Drop all QVDTAbles and Unique Source Tables
+  let vThisQVDTable = PEEK('QVDTableName',$(i),'QVDFilesRouter');
+  Call DropATable('$(vThisQVDTable)');
+  Call DropATable('$(vThisQVDTable)_UniqueSource');
+next i
+
+Call DropATable('StorePaths');
+Call DropATable('SourceFilePaths');
+
+Next dir;
+//If vfound is still 0, then no Project Folders were found.  Call Path (vname) to throw the appropriate error, then kill script.
+  if $(vprojs)=0 Then
+    Call QVDStorePaths(vProject);
+    Call LocalPaths(vProject);
+    exit script;
+  end if //if $(vfound)=0 Then
+end If //if $(vSourceSwitch)=0
+
+if $(vSourceSwitch)=1 then 
+  //TEMPCheckProject was defined partly as a function of vModeSwitch.
+  //If vModeSwitch = 0, then TEMPCheckProject will only contain the folder designated by vProject.
+  let vLibraryValidationMessage='';
+  Call ValidateSharePointLibrary (vsubsite,vlibraryname)
+  //List the Project-Level folders in the trace
+  trace FOUND $(vNumRows) PROJECT FOLDERS:;
+  for i=0 to $(vNumRows)-1
+    let vThisProject=PEEK('Name',$(i),'TEMPCheckProject');
+    trace $(i) $(vThisProject);
+  Next i;
+  trace $(vProjectFoldersMsg);
+  //Load Mapping File
+  //This only happens once, even in Enterprise Mode.
+  call MappingFiles;
+  for I=0 to $(vNumRows)-1
+    let vThisProject=PEEK('Name',$(I),'TEMPCheckProject');
+    let vProject = vThisProject;
+    //Skip any admin folders that start with "_"
+    IF  index('$(vThisProject)','_')<>1 then
+      Call QVDStorePaths (vThisProject)
+      trace **********STARTING PROJECT $(I) $(vThisProject)*****************;
+      set ErrorMode=0;
+      Call ValidateSharepointProject (vThisProject);
+      Call SharePointPaths (vThisProject);
+      set ErrorMode=1;  
+      call MakeCalls (vThisProject);
+      call QVDAndSourceReports;        
+    end if //IF  match('$(vThisProject)','_')= 0 then
+    //Drop all the source file tables
+    for j=0 to '$(vQVDFileRouterRows)'-1
+      let vThisFilesToAddTable =PEEK('SourceFilesToAdd'   ,'$(j)','QVDFilesRouter');
+      let vThisSourceFilesKey  =PEEK('SourceFileRouterKey','$(j)','QVDFilesRouter');
+      let vThisSourceFilesTable=LOOKUP('SourceFilesTableName','FileType','$(vThisSourceFilesKey)','SourceFileRouter');
+      call DropATable('$(vThisSourceFilesTable)');
+      call DropATable('$(vThisFilesToAddTable)');
+      //Drop all QVDTAbles and Unique Source Tables
+     let vThisQVDTable = PEEK('QVDTableName',$(j),'QVDFilesRouter');
+     Call DropATable('$(vThisQVDTable)');
+     Call DropATable('$(vThisQVDTable)_UniqueSource');
+    next j
+    Call DropATable('StorePaths');
+    Call DropATable('SourceFilePaths');    
+  Next I; 
+  Drop Table TEMPCheckProject;
+end If;
+
+
+drop table PARAMETERS;
+drop table QVDFilesRouter;
+drop table SourceFileRouter;
+drop table GlobalFromBStatements;
+
+// DROP Fields  Designation, SuffixClause;
+
