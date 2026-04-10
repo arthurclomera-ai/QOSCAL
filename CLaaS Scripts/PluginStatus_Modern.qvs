@@ -1,0 +1,37 @@
+// ---------------------------
+// Plugin Status (Enabled / Disabled / Missing) → $(NessusPluginStatusQVDTable)_Temp
+// Handles both modern and legacy Nessus policy layouts
+// ---------------------------
+
+// Modern layout: NessusClientData_v2/Policy/Preferences/PluginsPreferences/item
+PluginStatus_Modern:
+LOAD
+    // pluginID and family/name fields vary a little across Nessus exports; coalesce safely:
+    pluginID,
+    pluginFamily,
+    pluginName,
+    Lower(Trim(Alt([status], [state], [value]))) as PluginStatus,
+    '$(vfilenameclean)'                       as $(vSourceFileField),
+    '$(vThisScanDate)'                        as [Scan Date]
+FROM [$(vFROMA)]
+$(vFROMB03);
+
+// Build the per-file temp table, enforcing NO NULL/EMPTY critical fields
+// Note: also enforces non-empty SourceFile (your $(vSourceFileField))
+[$(NessusPluginStatusQVDTable)_Temp]:
+LOAD DISTINCT
+    pluginID,
+    pluginFamily,
+    pluginName,
+    PluginStatus,
+    $(vSourceFileField),
+    [Scan Date]
+Resident PluginStatus_Modern
+Where Len(Trim(pluginID))>0
+  and Len(Trim(pluginFamily))>0
+  and Len(Trim(PluginStatus))>0
+  and Len(Trim($(vSourceFileField)))>0;
+
+
+// Clean up staging
+Drop Table PluginStatus_Modern;

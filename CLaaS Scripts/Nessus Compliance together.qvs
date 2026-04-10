@@ -1,0 +1,557 @@
+//***************************************************************************************************************************************************
+// Author: Art Clomera
+// Date: 12/16/2019
+// Company: IPKeys Technologies, LLC
+// Function: NESSUS Load Script for .nessus files within Customer>Project>Reports/GRC.../Nessus Scans/ directory
+// STATUS: SeverityID = 'None', 'Closed', 'Open'
+//***************************************************************************************************************************************************
+Sub Nessus (vProject)
+
+
+//Don't even botherwith the rest if there are no new Nessus files
+
+if $(vNumberOfNewNessusFiles)>0 then
+let vSourceFileField    =LOOKUP('SourceNameField','FileType','Nessus','QVDFilesRouter'); //e.g. 'File_Ckl'
+
+//***************************************************************************************************************************************************
+// Loop through each Nessus file - put data into temp tables and then Concatenate to main tables
+//***************************************************************************************************************************************************
+
+//Load the NessusQVD file if there is one and then determine which source files are present.
+trace NESSUS;
+
+
+//Create a table of just the Nessus FileTypes from the QVDFilesRouter
+NessusRouter:
+NoConcatenate load
+FileType
+Resident QVDFilesRouter
+Where mid(FileType,1,LEN('Nessus'))='Nessus';
+
+FromBRouter:
+NoConcatenate Load
+Designation,
+SuffixClause
+Resident GlobalFromBStatements
+Where FileType='Nessus';
+
+//Build the the FROM statement appropriate for the file source. 
+//FROM statements comprise two parts, desgnated by vFROMA and vFROMB.
+//vFROMA refers either to the local connection path or the SharePoint connector.  This doesn't change. (As long as all local files sourced in this section are in the same directory.) 
+//vFROMB comprises the second part of the FROM statement that includes file types, etc.  This can change for each LOAD statement in this section:
+//Therefore, multiple vFROMB variables are created and numbered sequentially (e.g. vFROMB01, vFROMB02...vFROMBNN)
+//The string 'SuffixClause' here is just a place holder.
+if $(vSourceSwitch)=0 then
+//Local source
+  Let vNoOfFiles       = '$(vNumberOfNewNessusFiles)';//0;    
+elseif $(vSourceSwitch)=1 then
+//SharePoint source
+  let vFROMA='lib://$(vConnection)';
+  set vFileList=''$(vNessusfilenames);
+  let vNoOfFiles=0;
+  for Each file in $(vFileList)     //vFileList already contains filenames as filename.ext
+    if LEN('$(file)')>0 AND LEN(Lookup('$(vSourceFileField)','$(vSourceFileField)','$(file)','$(NessusQVDTable)_UniqueSource'))=0 then    
+      let vNoOfFiles=$(vNoOfFiles)+1;
+    end if
+  next file
+else
+//Anything else, just to be thorough.
+  let vFROMA='';
+  set vFileList='';
+  let vNextStatement='';
+End if //if $(vSourceSwitch)=0 then
+
+let vCompletetracker=0;
+trace Nessus call enter *******************;
+trace vNessusNewSourceFiles: $(vNessusNewSourceFiles);
+trace vFROMB: $(vFROMB);
+trace vNessusBaseDate: $(vNessusBaseDate);
+trace vNessusOffsetInt: $(vNessusOffsetInt);
+trace vNessusSourceDateFormat: $(vNessusSourceDateFormat);
+call OrganizeSourceFilesByScanDate ('$(vNessusNewSourceFiles)','Nessus','$(vFROMB)','FromBRouter',$(vNessusBaseDate),$(vNessusOffsetInt),'$(vNessusSourceDateFormat)','$(vProject)TEMPNessusFolderFiles');
+
+let vNumRows=NoOfRows('TEMP_FilesByDateSorted');
+for filerow=0 to $(vNumRows)-1
+  let file          =Peek('filename'     , $(filerow),'TEMP_FilesByDateSorted');  
+  let vfilenameclean=Peek('filenameclean', $(filerow),'TEMP_FilesByDateSorted');  
+  let vrealscandate =Peek('realscandate' , $(filerow),'TEMP_FilesByDateSorted');
+  let vDEMOscandate =Peek('DEMOscandate' , $(filerow),'TEMP_FilesByDateSorted'); 
+    if '$(vDemoSwitch)'=0 then
+      let vThisScanDate='$(vrealscandate)';
+    else 
+      let vThisScanDate='$(vDEMOscandate)';
+    end if;     
+
+let vCompletetracker=$(vCompletetracker)+1;
+
+let vIncorpMsg='*********'
+               &chr(10)&'Incorporating file: $(vfilenameclean),'
+               &chr(10)&'$(vCompletetracker)/$(vNoOfFiles) files'
+               &chr(10)&'*********';
+let vCompMsg='*********'
+             &chr(10)&'Completed file: $(vfilenameclean),'
+             &chr(10)&'$(vCompletetracker)/$(vNoOfFiles) files'
+             &chr(10)&'*********';
+
+//Plug the necessary values into the FROM statements, depending on the source
+if $(vSourceSwitch)=0 then
+  set vFROMA=$(file); 
+  Call GenerateFROMBs('$(vFROMB)','FromBRouter');//('$(vFromBBases)','$(vFromBs)','|||');
+elseif $(vSourceSwitch)=1 then 
+  let vThisURLIS=lookup('URLIS', 'Name', '$(file)', '$(vProject)TEMPNessusFolderFiles');
+  Call GenerateFROMBs('$(vFROMB)','FromBRouter','$(vThisURLIS)');//('$(vFromBBases)','$(vFromBs)','|||','$(vThisURLIS)');
+end if //if $(vSourceSwitch)=0 then
+
+trace $(vIncorpMsg);
+
+// build Nessus PPSM QVD
+// Step 2: Load HostTable (each ReportHost node)
+//---------------------------------------------------------------
+HostTable:
+LOAD
+    name AS HostName,
+    [@name] AS HostKey       // will link to compliance results
+FROM [$(vFROMA)]
+$(vFROMB02);
+
+CPE_Raw:
+LOAD
+	[port],
+	[svc_name],
+	[protocol],
+    [@pluginID] AS PluginID,
+    [@pluginName] AS PluginName,
+    [%Key_ReportHost_8100F7F0D883C03F],
+    '$(vfilenameclean)' as $(vSourceFileField),
+    '$(vThisScanDate)' as [Scan Date],
+    cpe AS RawCPE
+FROM [$(vFROMA)]
+$(vFROMB03);
+// Load CPE data from Nessus XML
+
+
+// Parse and classify the CPE labels
+[$(NessusPPSMQVDTable)_Temp]:
+LOAD
+	[port],
+	[svc_name], 
+    [%Key_ReportHost_8100F7F0D883C03F],
+	[protocol],
+    PluginID,
+    PluginName,
+    $(vSourceFileField),
+    [Scan Date],
+    RawCPE,
+    // FIX: Extract just the type letter (h/a/o) from CPE
+    // CPE format: cpe:/X:vendor:product where X is the type
+    Mid(SubField(RawCPE, ':', 2), 2, 1) AS CPE_Type,
+    SubField(RawCPE, ':', 3) AS CPE_Vendor,
+    SubField(RawCPE, ':', 4) AS CPE_Product,
+    SubField(RawCPE, ':', 5) AS CPE_Version,
+    // FIX: Use the corrected CPE_Type extraction for the label
+    Pick(
+        Match(Lower(Mid(SubField(RawCPE, ':', 2), 2, 1)), 'h', 'a', 'o'),
+        '[H] Hardware',
+        '[A] Application',
+        '[O] Operating System'
+    ) AS CPE_Label
+Resident CPE_Raw;
+
+// Drop intermediate table
+DROP TABLE CPE_Raw;
+
+// Create CPE Correlation Keys for system identification
+// This allows creating independent scans for each internally hosted system
+// Logic: Use CPE labels (Hardware || Application || Operating System) to identify systems
+
+// First, create a composite key combining host with CPE type
+TEMP_CPE_WithKeys:
+NoConcatenate LOAD
+    *,
+    // Create correlation key: Host + CPE Type (for Hardware, Application, OS grouping)
+    [%Key_ReportHost_8100F7F0D883C03F] & '_' & CPE_Type as CPE_SystemKey,
+    
+    // Create specific correlation keys for each CPE category
+    If(CPE_Type = 'h', [%Key_ReportHost_8100F7F0D883C03F] & '_HW_' & CPE_Vendor & '_' & CPE_Product, Null()) as CPE_HardwareKey,
+    If(CPE_Type = 'a', [%Key_ReportHost_8100F7F0D883C03F] & '_APP_' & CPE_Vendor & '_' & CPE_Product, Null()) as CPE_ApplicationKey,
+    If(CPE_Type = 'o', [%Key_ReportHost_8100F7F0D883C03F] & '_OS_' & CPE_Vendor & '_' & CPE_Product, Null()) as CPE_OSKey,
+    
+    // Create a universal hardware inventory key (for Hardware Inventory Reference Data)
+    // Format: Vendor_Product_Version (can be used to link to hardware inventory)
+    If(Len(CPE_Vendor) > 0 and Len(CPE_Product) > 0,
+        CPE_Vendor & '|' & CPE_Product & 
+        If(Len(CPE_Version) > 0, '|' & CPE_Version, ''),
+        Null()
+    ) as HardwareInventoryKey
+    
+Resident [$(NessusPPSMQVDTable)_Temp];
+
+// Drop the old temp table and rename the new one
+DROP TABLE [$(NessusPPSMQVDTable)_Temp];
+
+[$(NessusPPSMQVDTable)_Temp]:
+NoConcatenate LOAD * Resident TEMP_CPE_WithKeys;
+DROP TABLE TEMP_CPE_WithKeys;
+
+join ($(NessusPPSMQVDTable)_Temp)
+LOAD
+	name as tagKey,
+    [%Key_ReportHost_8100F7F0D883C03F],
+    [tag%Table] as tagValue
+FROM [$(vFROMA)]
+$(vFROMB04)
+Where match (name,  'host-ip', 'os', 'mac-address', 'netbios-name');
+
+
+join ($(NessusPPSMQVDTable)_Temp)
+LOAD
+    // If the tag is "mac-address", force HostKeyID = 'mac-address'
+    If(name = 'mac-address', [tag%Table]) as HostKeyID
+FROM [$(vFROMA)]
+$(vFROMB04)
+Where match (name,  'mac-address');
+
+// build Nessus Sofware QVD
+[$(NessusSoftwareQVDTable)_Temp]:
+LOAD
+        name as [IP Address],
+        '$(vProject)' & name  as ProgramHostID,
+        '$(vfilenameclean)' as $(vSourceFileField),
+        '$(vThisScanDate)' as [Scan Date]
+FROM [$(vFROMA)]
+$(vFROMB02);
+
+join ($(NessusSoftwareQVDTable)_Temp)
+LOAD
+    // If the tag is "mac-address", force HostKeyID = 'mac-address'
+    If(name = 'mac-address', [tag%Table]) as HostKeyID
+FROM [$(vFROMA)]
+$(vFROMB04)
+Where match (name,  'mac-address');
+
+// include s/w list and versions in the Nessus Software QVD
+join ($(NessusSoftwareQVDTable)_Temp)
+Load
+ *,
+ if(wildmatch(TempField,'{*'),null(),subfield(TempField,'[version',1)) as Software;
+//   if(wildmatch(TempField,'{*'),null(),TextBetween(TempField, '[version',']',1)) as Version;
+load 
+    [%Key_ReportHost_8100F7F0D883C03F],
+subfield(rtrim(ltrim(mid(plugin_output,60, Len(plugin_output)))) ,chr(10)) as TempField
+FROM [$(vFROMA)]
+$(vFROMB03)
+where match(pluginID,'20811','22869');
+
+drop field TempField;
+
+// build Nessus QVD
+[$(NessusQVDTable)_Temp]:
+LOAD
+        name AS [IP Address],
+        '$(vProject)' & name as ProgramHostID,
+         [%Key_ReportHost_8100F7F0D883C03F],
+        '$(vfilenameclean)' as $(vSourceFileField),
+        '$(vThisScanDate)' as [Scan Date]
+FROM [$(vFROMA)]
+$(vFROMB02);
+
+
+join ($(NessusQVDTable)_Temp)
+Load 
+  [%Key_ReportHost_8100F7F0D883C03F],
+  ApplyMap ('PluginFamilyTable', pluginFamily, 'Best Practice') as Control_Temp,
+    if (severity = '4', 'Very High',
+       if (severity = '3','High',
+           if(severity = '2', 'Medium',
+               if(severity = '1', 'Low',
+                  if(severity ='0', 'Info'
+    ))))) as SeverityID,
+    if (severity = '4' or severity = '3','CAT I',
+        if(severity = '2', 'CAT II',
+            if(severity = '1', 'CAT III',
+              if (severity = '0', 'Info'
+    )))) as STIG_Severity,
+    solution & chr(10) & 'Reference(s)' & see_also as Recommendation,
+     [cvss3_base_score] as [CVSS Score],
+	[pluginID] as VulID,
+    pluginName,
+	[plugin_output] as Synopsis
+FROM [$(vFROMA)]
+$(vFROMB03) where match(severity,'4','3','2','1');
+
+join ($(NessusQVDTable)_Temp)
+LOAD
+    // If the tag is "mac-address", force HostKeyID = 'mac-address'
+    If(name = 'mac-address', [tag%Table]) as HostKeyID
+FROM [$(vFROMA)]
+$(vFROMB04)
+Where match (name,  'mac-address');
+
+join ($(NessusQVDTable)_Temp)
+load 
+  [%Key_ReportHost_8100F7F0D883C03F],
+//   if(wildmatch(TextBetween(plugin_output,':',chr(10),1),'*Server*')or WildMatch(OS,'*ESXi*'),TextBetween(plugin_output,':',chr(10),1)) as Server,
+  if(wildmatch(TextBetween(plugin_output,':',chr(10),1),'*Server*')=0 and WildMatch(OS,'*ESXi*')=0,TextBetween(plugin_output,':',chr(10),1)) as OS
+FROM [$(vFROMA)]
+$(vFROMB03)
+where match(pluginID,'11936');
+/*
+Nessus Compliance Section
+*/
+//---------------------------------------------------------------
+// Step 3: Extract Host Properties (IP, OS, etc.)
+//---------------------------------------------------------------
+HostPropsRaw:
+LOAD
+    name AS HostKey,
+    [@name] AS PropertyName,
+    value AS PropertyValue
+FROM [$(vFROMA)]
+$(vFROMB04);
+
+// Pivot key host properties we care about
+HostProps:
+LOAD
+    HostKey,
+    MaxString(If(PropertyName='HOST_START', PropertyValue)) AS ScanStart,
+    MaxString(If(PropertyName='HOST_END', PropertyValue)) AS ScanEnd,
+    MaxString(If(PropertyName='host-ip', PropertyValue)) AS HostIP,
+    MaxString(If(PropertyName='operating-system', PropertyValue)) AS HostOS
+RESIDENT HostPropsRaw
+GROUP BY HostKey;
+
+DROP TABLE HostPropsRaw;
+
+//---------------------------------------------------------------
+// Step 4: Load Compliance Plugin Output (Policy Compliance family)
+//---------------------------------------------------------------
+Compliance_PluginOutput:
+LOAD
+    name AS HostKey,
+    [pluginID],
+    [pluginName],
+    [pluginFamily],
+    [severity],
+//     [risk_factor],
+    [description]
+//     [solution],
+//     [see_also],
+//     [synopsis],
+//     [plugin_modification_date],
+//     [plugin_publication_date],
+//     [plugin_type],
+//     [fname],
+//     [plugin_output]
+//     name AS HostKey,                   // parent host node → join key
+//     [pluginID] AS VulnID,
+//     pluginName,
+//     pluginFamily,
+//     severity,
+//     solution & Chr(10) & 'Reference(s): ' & see_also AS Recommendation,
+//     plugin_output
+//FROM [$(vFROMA)]
+FROM [$(vFROMA)]
+$(vFROMB03)
+WHERE Match(pluginFamily,'Policy Compliance');
+
+//---------------------------------------------------------------
+// Step 5: Join Host info (hostname, IP, OS, scan times)
+//---------------------------------------------------------------
+// --- after you've built HostTable and HostProps ---
+
+// 1) Join just the HostName from HostTable
+LEFT JOIN (Compliance_PluginOutput)
+LOAD
+    HostKey,
+    '$(vFileName)' as FileName,
+    HostName
+RESIDENT HostTable;
+
+
+DROP TABLE HostTable;
+DROP TABLE HostProps;
+
+//---------------------------------------------------------------
+// Step 6: Parse key compliance fields from plugin_output
+//---------------------------------------------------------------
+// Assume your Nessus XML has already been parsed into a table called "$(NessusComplianceQVDTable)_Temp"
+// and plugin_output is the field containing the long text blocks.
+
+$(NessusComplianceQVDTable)_Temp:
+LOAD
+    HostKey,
+    [pluginID],
+    [pluginName],
+    [pluginFamily],
+    [severity],
+
+    // Extract the entire block before the Solution section
+    TextBetween([description], '', 'Solution:') AS PreSolutionText,
+
+    // Extract the part before 'Solution:' for parsing
+    TextBetween([description], '', 'Solution:') AS FullHeader,
+
+    // Extract the compliance test (everything before the first colon ':')
+    Trim(SubField(TextBetween([description], '', 'Solution:'), ':', 1)) AS [Compliance Test],
+
+//     // Extract the test result (everything after the first colon)
+//     Trim(SubField(TextBetween([description], '', 'Solution:'), ':', 2)) AS [Test Results],
+    // --- ComplianceResult ---
+    // --- ComplianceResult ---
+    TextBetween([description], '[', ']') AS [ComplianceResult],
+
+    // --- ResultInfo (Everything after ']' but before 'Solution:') ---
+    Trim(
+        PurgeChar(
+            Replace(
+                KeepChar(
+                    TextBetween([description], ']', 'Solution:'),
+                    'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()_+-=[]{};:,.?/<>|`~ ' & Chr(10) & Chr(13)
+                ),
+                Chr(10) & Chr(13),
+                ' '
+            ),
+            '"'
+        )
+    ) AS [ResultInfo],
+    // Continue extracting other sections
+    TextBetween([description], 'Solution:', 'See Also:') AS Solution,
+    TextBetween([description], 'See Also:', 'Reference:') AS SeeAlso,
+    TextBetween([description], 'Reference:', 'Policy Value:') AS Reference,
+    TextBetween([description], 'Policy Value:', 'Actual Value:') AS PolicyValue,
+    // --- NEW: Everything from "Actual Value:" to end of description ---
+    Trim(Mid([description], Index([description], 'Actual Value:') + Len('Actual Value:'))) AS ActualValue
+
+
+RESIDENT Compliance_PluginOutput
+WHERE WildMatch(pluginFamily, 'Policy Compliance');
+
+
+/*
+End of Nessus Compliance Section
+*/
+IF ALT(NoOfRows('$(NessusPPSMQVDTable)'), -1) = -1 THEN 
+       RENAME TABLE [$(NessusPPSMQVDTable)_Temp] to [$(NessusPPSMQVDTable)];
+ELSE
+      CONCATENATE ([$(NessusPPSMQVDTable)])
+      LOAD * RESIDENT [$(NessusPPSMQVDTable)_Temp];
+      drop table $(NessusPPSMQVDTable)_Temp;
+END IF
+
+
+// Rename Counts table if it doesn't exist, else concatenate it.    
+IF ALT(NoOfRows('$(NessusQVDTable)'), -1) = -1 THEN 
+       RENAME TABLE [$(NessusQVDTable)_Temp] to [$(NessusQVDTable)];
+ELSE
+      CONCATENATE ([$(NessusQVDTable)])
+      LOAD * RESIDENT [$(NessusQVDTable)_Temp];
+      drop table $(NessusQVDTable)_Temp;
+END IF
+
+IF ALT(NoOfRows('$(NessusSoftwareQVDTable)'), -1) = -1 THEN 
+       RENAME TABLE [$(NessusSoftwareQVDTable)_Temp] to [$(NessusSoftwareQVDTable)];
+ELSE
+      CONCATENATE ([$(NessusSoftwareQVDTable)])
+      LOAD * RESIDENT [$(NessusSoftwareQVDTable)_Temp];
+      drop table $(NessusSoftwareQVDTable)_Temp;
+END IF
+
+// Only proceed if $(NessusComplianceQVDTable)_Temp exists
+IF Alt(NoOfRows('$(NessusComplianceQVDTable)_Temp'), -1) > -1 THEN
+
+// Check if $(NessusComplianceQVDTable) exists
+IF Alt(NoOfRows('$(NessusComplianceQVDTable)'), -1) = -1 THEN
+    // First file → create the main table
+    RENAME TABLE [$(NessusComplianceQVDTable)_Temp] TO [$(NessusComplianceQVDTable)];
+ELSE
+    // Subsequent file → append
+    CONCATENATE ($(NessusComplianceQVDTable))
+    LOAD *
+    RESIDENT [$(NessusComplianceQVDTable)_Temp];
+
+    // Drop the temp table to avoid reuse
+    DROP TABLE [$(NessusComplianceQVDTable)_Temp];
+END IF
+
+END IF
+
+// drop table $(NessusComplianceQVDTable)_Temp;
+DROP TABLE Compliance_PluginOutput;
+trace $(vCompMsg);
+
+next filerow;
+Call DropATable ('TEMP_FilesByDateSorted');
+
+
+
+let vNumRows        =NoOfRows('$(NessusQVDTable)'); 
+let vNumPPSMRows    =NoOfRows('$(NessusPPSMQVDTable)');    
+let vNumSoftwareRows=NoOfRows('$(NessusSoftwareQVDTable)');   
+let vNumComplianceRows=NoOfRows('$(NessusComplianceQVDTable)'); 
+
+//START NEW 2024 02 12
+//Now all required rows for the updated Nessus type QVDs are contained in the respectice tables. 
+//A [Status] column must be added to record which row are "Open" and which are "Closed"
+//Each unique IP address will be consisdered.  For all rows with a given IP address, those with the latest scan date will be marked "Open"
+//All other rows with the same IP address will be marked "Closed"
+If '$(vNumRows)'>0 then
+  Call CreateSortTable('$(NessusQVDTable)','TEMP_NessusByIpByDate','[IP Address] asc, [Scan Date] desc');  //Create table TEMP_NessusByIpByDate from table $(NessusQVDTable)
+
+  TEMP_ScanDateIPStatus:   //[IP Address] + [Scan Date] combinations with latest scan date and [Status] set to 'Open'
+    Noconcatenate Load
+      [IP Address],
+      [Scan Date],
+      'Open' as STATUS
+    Resident TEMP_NessusByIpByDate
+    Where [IP Address]<>Previous([IP Address]);
+  
+    Load                //[IP Address] + [Scan Date] combinations with all but latest scan dates and [Status] set to 'Closed'
+     [IP Address],
+      [Scan Date],
+      'Closed' as STATUS
+    Resident TEMP_NessusByIpByDate
+    Where [IP Address]=Previous([IP Address]) and [Scan Date]<>Previous([Scan Date]);
+
+  Left join ($(NessusQVDTable))
+  Load
+  *
+  Resident TEMP_ScanDateIPStatus;
+
+
+  call DropATable('TEMP_ScanDateIPStatus');
+  call DropATable('TEMP_NessusByIpByDate');
+
+end if //If '$(vNumRows)'>0 then
+
+//END NEW 2024 02 12
+
+for nessustypes=0 to NoOfRows('NessusRouter')-1
+  let vThisType     =PEEK('FileType' ,'$(nessustypes)','NessusRouter');                 //e.g. NessusPPSM
+  let vThisTableName=LOOKUP('QVDTableName','FileType','$(vThisType)','QVDFilesRouter'); //e.g. NessusSoftwareQVDTable
+  let vThisStorePath=LOOKUP('StorePath'   ,'FileType','$(vThisType)','StorePaths');
+  Call StoreATable('$(vThisTableName)','lib://$(vThisStorePath)','1');
+  Call DropATable('$(vThisTableName)_UniqueSource');   
+next nessustypes;
+if $(vNumRows)>0 AND $(vNoOfFiles)>0 THEN 
+//***************************************************************************************************************************************************
+//  concatenate the new files to the QVDs.
+//***************************************************************************************************************************************************
+	trace there are new Nessus files $(vStorePathNessus);
+    trace The $(NessusQVDTable) QVD written with $(vNumRows) Rows!;
+    trace The $(NessusPPSMQVDTable) QVD written with $(vNumPPSMRows) Rows!;   
+    trace The $(NessusSoftwareQVDTable) QVD written with $(vNumSoftwareRows) Rows!;  
+    trace The $(NessusComplianceQVDTable) QVD written with $(vNumComplianceRows) Rows!;  
+else 
+//***************************************************************************************************************************************************
+// there are no new files to concatenate.
+//***************************************************************************************************************************************************
+	trace  there are no new Nessus files for $(vProject);
+end if //if NoOfRows('$(vDataTableName)')>0 AND $(vNoOfFiles)>0 THEN 
+
+drop table FromBRouter;
+drop table NessusRouter;
+end if //if $(vNumberOfNewNessusFiles)<>-1 then
+
+Call DropATable ('$(vProject)TEMPNessusFolderFiles');
+
+end sub

@@ -1,0 +1,69 @@
+//***************************************************************************************************************************************************
+// Author: Art Clomera
+// Date: 04/13/2021
+// Company: IPKeys Technologies, LLC
+// Function:
+//***************************************************************************************************************************************************
+
+sub QVDLoader (FullPathName)
+trace ****************loading QVD Loader ************;
+// assign the Project variable from the full path name
+   Let vProject = SubField('$(FullPathName)','/',5);
+   Let vQVD = SubField('$(FullPathName)','/',-1); 
+   trace vQVD = $(vQVD);
+   Let  vDEMOQVD = Right(vQVD, 8);
+   
+   if '$(vDEMOQVD)' = 'List.QVD' then
+     Let vSource = 'CheckList';
+   elseif '$(vDEMOQVD)' = 'SCAP.QVD' then
+   	Let vSource = 'SCAP';
+   else
+   	trace -----------------error Source parameter error------------------------;
+   end if;
+   
+   trace vSource = '$(vSource)' ;
+
+	Let VulCost=0;
+	QVD_Temp:
+    Load 
+	Control_Temp as Control,
+	VulID,
+	[IP Address],
+	SeverityID,
+    if(SeverityID = 'Very High' AND (STATUS='Open' OR STATUS='Not_Reviewed'), $(vVeryHighSeverityCost),
+    	if(SeverityID = 'High' AND (STATUS='Open' OR STATUS='Not_Reviewed'), $(vHighSeverityCost),
+        	if(SeverityID = 'Medium' AND (STATUS='Open' OR STATUS='Not_Reviewed'), $(vMedSeverityCost),
+            	if(SeverityID = 'Low' AND (STATUS='Open' OR STATUS='Not_Reviewed'), $(vLowSeverityCost))))) as VulCost,
+    STIG_Severity,
+    [Scan Date],
+    Recommendation,
+    'Milestone 1: ' & ', Apply remediaton step in test environment and validate closure of finding' & chr(10)
+    & 'Milestone 2: ' & ', Functionally test system with remediaton step included' & chr(10)
+    & 'Milestone 3: ' & ', Present solution to CCB for approval and deploy remediation step to production' &chr(10) as [Milestone Completion Dates],
+    OS,
+    if (WildMatch(OS, '*Windows*'),'Microsoft Windows OS',
+      if (WildMatch(OS, '*Linux*'),'Linux OS',
+          if (WildMatch(OS, '*Mac*','*Apple*','*iPhone*', '*iPad*'),'Apple IOS',
+              if (WildMatch(OS, '*Cisco*'), 'Cisco IOS',
+                  if (WildMatch(OS, '*VMWare*'), 'VMWare IOS','Other'))))) as OSCategory,
+    CCI,
+    Synopsis,
+    File_Ckl,
+    Comp,
+    [CVSS Score],
+    HostKeyID,
+    ProgramHostID,
+    '$(vProject)' & VulID as ProgramVulID,
+    pow([CVSS Score],3)/100 as [DoS Score],
+     '$(vProject)'&date([Scan Date]&'YYYYMMDD')&[IP Address]&SeverityID&VulID as RawConcat1,
+    STATUS,
+    '$(vSource)'  as Source,
+    '$(vCustomer)' as Customer,
+    '$(vProject)' as Program
+    FROM [$(FullPathName)]
+    (qvd);
+ // Script tracing
+    Trace End of QVD Loader:  Load: $(FullPathName);
+    Trace For Project: $(vProject);
+    
+end sub

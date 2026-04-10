@@ -1,0 +1,192 @@
+//***************************************************************************************************************************************************
+// Author: Art Clomera
+// Date: 11/14/2025
+// Company: Art Clomera Consulting
+// Function: Prisma Load Script for .csv files within Customer>Project>Reports/DAST.../Prisma/ directory
+//***************************************************************************************************************************************************
+Sub Prisma (vProject)
+//Don't even bother with the rest of this section if there are no Prisma files
+if $(vNumberOfNewPrismaFiles)>0 then
+
+let vDataTableName=LOOKUP('QVDTableName','FileType','RHACS','QVDFilesRouter');
+trace ******************* vDataTableName: $(vDataTableName) ******************;
+trace ******************* FileType: $(FileType) ******************;
+trace ******************* QVDFilesRouter: $(QVDFilesRouter) ******************;
+//let vSourceFileField=LOOKUP('SourceNameField','FileType','Prisma','QVDFilesRouter'); //e.g. 'File_Ckl'
+trace ******************* vSourceFileField: $(vSourceFileField) ******************;
+
+//***************************************************************************************************************************************************
+// Loop through each Prisma file
+//***************************************************************************************************************************************************
+
+trace Prisma;
+
+//Create a table of just the Nessus FileTypes from the QVDFilesRouter
+
+// FromBRouter:
+// NoConcatenate Load
+// Designation,
+// SuffixClause
+// Resident GlobalFromBStatements
+// Where FileType='Prisma';
+ 
+        
+//Build the the FROM statement appropriate for the file source. 
+//FROM statements comprise two parts, desgnated by vFROMA and vFROMB.
+  //vFROMA refers either to the local connection path or the SharePoint connector.  This doesn't change. (As long as all local files sourced in this section are in the same directory.) 
+  //vFROMB comprises the second part of the FROM statement that includes file types, etc.  This can change for each LOAD statement in this section:
+    //Therefore, multiple vFROMB variables are created and numbered sequentially (e.g. vFROMB01, vFROMB02...vFROMBNN)
+//The string 'SuffixClause' here is just a place holder
+if $(vSourceSwitch)=0 then
+trace Prisma vSourceSwitch = 0 *******************;
+//Local source
+  Let vNoOfFiles = '$(vNumberOfNewPrismaFiles)'; 
+
+elseif $(vSourceSwitch)=1 then
+trace Prisma vSourceSwitch = 1*******************;
+//SharePoint source
+  let vFROMA='lib://$(vConnection)';
+  set vFileList=''$(vPrismafilenames);
+  let vNoOfFiles=0;
+  for Each file in $(vFileList)     //vFileList already contains filenames as filename.ext
+    if LEN('$(file)')>0 AND LEN(Lookup('$(vSourceFileField)','$(vSourceFileField)','$(file)','$(vDataTableName)_UniqueSource'))=0 then    
+      let vNoOfFiles=$(vNoOfFiles)+1;
+    end if
+  next file
+else
+//Anything else, just to be thorough.
+trace Prisma else *******************;
+  let vFROMA='';
+  set vFileList='';
+  let vNextStatement='';
+End if
+
+let vCompletetracker=0;
+trace Prisma call enter *******************;
+call OrganizeSourceFilesByScanDate ('$(vPrismaNewSourceFiles)','Prisma','$(vFROMB)','FromBRouter',$(vPrismaBaseDate),$(vPrismaOffsetInt),'$(vPrismaSourceDateFormat)','$(vProject)TEMPPrismaFolderFiles');
+trace Prisma call exit*******************;
+let vNumRows        =NoOfRows('$(PrismaQVDTable)'); 
+trace Prisma vNumRows = *******************;
+//let vNumRows=NoOfRows('TEMP_FilesByDateSorted');
+for filerow=0 to $(vNumRows)-1
+trace Prisma filerow = *******************;
+  let file         =Peek('filename'    , $(filerow),'TEMP_FilesByDateSorted');
+  let vrealscandate=Peek('realscandate', $(filerow),'TEMP_FilesByDateSorted');
+  let vDEMOscandate=Peek('DEMOscandate', $(filerow),'TEMP_FilesByDateSorted');  
+    if '$(vDemoSwitch)'=0 then
+      let vThisScanDate='$(vrealscandate)';
+    else 
+      let vThisScanDate='$(vDEMOscandate)';
+    end if;     
+if '$(vSourceSwitch)'=0 then
+  call FileNameFromFilePath ('$(file)');   //creates variable vFilenameclean = filename.ext 
+else 
+  let vFilenameclean='$(file)';
+end if //if '$(vSourceSwitch)'=0 then
+
+let vCompletetracker=$(vCompletetracker)+1;
+
+let vIncorpMsg='*********'
+               &chr(10)&'Incorporating file: $(vFilenameclean),'
+               &chr(10)&'$(vCompletetracker)/$(vNoOfFiles) files'
+               &chr(10)&'*********';
+let vCompMsg='*********'
+             &chr(10)&'Completed file: $(vFilenameclean),'
+             &chr(10)&'$(vCompletetracker)/$(vNoOfFiles) files'
+             &chr(10)&'*********';
+
+//Plug the necessary values into the FROM statements, depending on the source
+if $(vSourceSwitch)=0 then
+  set vFROMA=$(file);
+  Call GenerateFROMBs('$(vFROMB)','FromBRouter');                      
+elseif $(vSourceSwitch)=1 then 
+  let vThisURLIS=lookup('URLIS', 'Name', '$(file)', '$(vProject)TEMPPrismaFolderFiles');
+  Call GenerateFROMBs('$(vFROMB)','FromBRouter','$(vThisURLIS)');   
+end if //if $(vSourceSwitch)=0 then
+
+trace Line 100: vFROMA: $(vFROMA);
+trace vFROMB: $(vFROMB);
+
+trace $(vIncorpMsg);
+
+// build Prisma QVD
+[$(vDataTableName)_Temp]:
+LOAD
+	[Hostname],
+	[Distro],
+	[CVE ID] as CVE_ID,
+	[Compliance ID],
+    if ([Result] = 'fail', 'Open', 'Closed') as STATUS,
+	[Type],
+	Capitalize([Severity]) as SeverityID,
+	[Packages],
+	[Source Package],
+	[Package Version],
+	[Package License],
+	[Package Path],
+	[CVSS] as [CVSS Score],
+	[Fix Status],
+	[Vulnerability Tags],
+	[Description] as Prisma_Description,
+	[Cause],
+	[Risk Factors],
+	[Published],
+	[Services],
+	[Cluster],
+	[Vulnerability Link],
+	[Agentless],
+	[Provider],
+	[Account ID],
+	[Region],
+	[Resource ID],
+	[Discovered],
+	[PURL],   
+    '$(vProject)' & Hostname  as ProgramHostID,
+	[url] as NVD_url
+FROM [$(vFROMA)]
+//$(vFROMB11);
+// FROM [lib://AttachedFiles/Prisma_Data_fsa_cloud_FY25Q3.csv]
+ (txt, codepage is 28591, embedded labels, delimiter is ',', msq);
+
+
+//If the main data table has not been created, then rename the Temp table to the main table. Otherwise, concatenate.
+
+IF ALT(NoOfRows('$(vDataTableName)'),-1)= -1 THEN
+  RENAME TABLE [$(vDataTableName)_Temp] to [$(vDataTableName)];
+ELSE
+  CONCATENATE ([$(vDataTableName)])
+  LOAD * RESIDENT [$(vDataTableName)_Temp];
+  drop table $(vDataTableName)_Temp;
+END IF; 
+
+
+trace Line 159: $(vCompMsg);
+next filerow;
+
+Call DropATable ('TEMP_FilesByDateSorted');
+//***************************************************************************************************************************************************
+//  The if statement below is a check to see if the table from the script below.  
+//	The script above will run regardless, however, if no Prisma files are found, the "Prisma_Temp" table will not be created.
+//***************************************************************************************************************************************************
+
+//If there is an actual data table created AND there were new source files to add, then write the QVD
+
+Call StoreATable ('$(vDataTableName)','lib://$(vStorePathPrisma)','1');
+if NoOfRows('$(vDataTableName)')>0 AND $(vNoOfFiles)>0 THEN //if vConcatenate >0 Then
+//***************************************************************************************************************************************************
+//  concatenate the new files to the QVDs.
+//***************************************************************************************************************************************************
+
+trace Prisma QVD stored: lib://$(vStorePathPrisma);
+else
+//***************************************************************************************************************************************************
+// there are no new files to concatenate.
+//***************************************************************************************************************************************************
+trace No new Prisma File exists for $(vProject);
+end if;  //NoOfRows('$(vDataTableName)')>0 AND $(vNoOfFiles)>0 THEN
+
+Call DropATable ('$(vDataTableName)_UniqueSource');
+Call DropATable ('$(vProject)TEMPPrismaFolderFiles');
+//drop table FromBRouter;
+end if //if $(vNumberOfNewPrismaFiles)<>-1 then
+end sub

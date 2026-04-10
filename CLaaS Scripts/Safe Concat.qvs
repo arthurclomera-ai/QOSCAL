@@ -1,0 +1,39 @@
+//------------------------------------------------------------------
+// SafeConcat - Final Hardened Version (handles blank evals)
+//------------------------------------------------------------------
+SUB SafeConcat(vTargetTable, vSourceTable)
+    TRACE >>> Entering SafeConcat: $(vTargetTable) from $(vSourceTable);
+
+    // Only proceed if the source table exists
+    IF TableNumber('$(vSourceTable)') >= 0 THEN
+        LET vRowCount = NoOfRows('$(vSourceTable)');
+        TRACE --- $(vSourceTable) found with $(vRowCount) rows;
+
+        IF $(vRowCount) > 0 THEN
+            // Evaluate table existence safely
+            LET vTargetExists = TableNumber('$(vTargetTable)');
+            IF Len('$(vTargetExists)') = 0 THEN
+                LET vTargetExists = -9999; // force numeric default when null
+            END IF
+            TRACE --- Evaluated vTargetExists = $(vTargetExists);
+
+            // Branch safely
+            IF $(vTargetExists) < 0 THEN
+                TRACE --- Target table $(vTargetTable) not found: creating new table from $(vSourceTable);
+                RENAME TABLE [$(vSourceTable)] TO [$(vTargetTable)];
+            ELSE
+                TRACE --- Target table $(vTargetTable) exists: concatenating $(vSourceTable);
+                CONCATENATE ([$(vTargetTable)])
+                LOAD * RESIDENT [$(vSourceTable)];
+                TRACE --- Concatenation complete: dropping $(vSourceTable);
+                DROP TABLE [$(vSourceTable)];
+            END IF
+        ELSE
+            TRACE --- $(vSourceTable) has 0 rows: skipping concatenation;
+        END IF
+    ELSE
+        TRACE --- Source table $(vSourceTable) not found: skipping;
+    END IF
+
+    TRACE <<< Exiting SafeConcat;
+END SUB

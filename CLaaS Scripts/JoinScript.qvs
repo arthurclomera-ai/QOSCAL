@@ -1,0 +1,48 @@
+//***************************************************************************************************************************************************
+// Author: Art Clomera
+// Date: 04/13/2021
+// Company: IPKeys Technologies, LLC
+// Function: Join scan data from QVD files
+//*************************************************************************************************************************************
+
+Sub JoinScript
+
+Trace Joining QVD_Temp to ScanData;
+
+  Concatenate (ScanData)
+  load *,
+    Year(date([Scan Date])) AS [Scan Year],
+    MonthName(date([Scan Date])) AS [Scan Month & Year],
+    Month(date([Scan Date])) AS [Scan Month],
+    Dual(Month(date([Scan Date]))  & '-' & Day([Scan Date]), Num(Month([Scan Date]), '00') & Num(Day([Scan Date]), '00')) AS [Scan Day of Month],
+      
+    If(Today() - [Scan Date] <= 30, Dual('0-30 Days', 1),
+        If(Today() - [Scan Date] <= 60, Dual('31-60 Days', 2),
+            If(Today() - [Scan Date] <= 90, Dual('61-90 Days', 3),
+                If(Today() - [Scan Date] <= 120, Dual('91-120 Days', 4),
+                    Dual('>121 Days', 5))))) as ConMonBucket,
+                    
+  Today() - date([Scan Date]) as ScanAge,
+  pow([CVSS Score],3)/100 as [DoS Score],
+      'Milestone 1: ' & ', Apply remediaton step in test environment and validate closure of finding' & chr(10)
+    & 'Milestone 2: ' & ', Functionally test system with remediaton step included' & chr(10)
+    & 'Milestone 3: ' & ', Present solution to CCB for approval and deploy remediation step to production' &chr(10) as [Milestone Completion Dates],
+        if (WildMatch(OS, '*Windows*'),'Microsoft Windows OS',
+      if (WildMatch(OS, '*Linux*'),'Linux OS',
+          if (WildMatch(OS, '*Mac*','*Apple*','*iPhone*', '*iPad*'),'Apple IOS',
+              if (WildMatch(OS, '*Cisco*'), 'Cisco IOS',
+                  if (WildMatch(OS, '*VMWare*'), 'VMWare IOS','Other'))))) as OSCategory,
+  '$(vProject)'&date([Scan Date]&'YYYYMMDD')&[IP Address]&SeverityID&VulID as RawConcat1,
+  if(SeverityID = 'High', date([Scan Date] + $(vHighDays)),
+      if(SeverityID = 'Medium', 	date([Scan Date] + $(vMediumDays)),
+          if(SeverityID = 'Low', 	date([Scan Date] + $(vLowDays))))) as [Scheduled Completion Date],
+  if(SeverityID = 'Very High' AND (STATUS='Open' OR STATUS='Not_Reviewed'), $(vVeryHighSeverityCost),
+    	if(SeverityID = 'High' AND (STATUS='Open' OR STATUS='Not_Reviewed'), $(vHighSeverityCost),
+        	if(SeverityID = 'Medium' AND (STATUS='Open' OR STATUS='Not_Reviewed'), $(vMedSeverityCost),
+            	if(SeverityID = 'Low' AND (STATUS='Open' OR STATUS='Not_Reviewed'), $(vLowSeverityCost))))) as VulCost
+	Resident QVD_Temp;
+	drop table QVD_Temp;
+   
+end sub
+
+

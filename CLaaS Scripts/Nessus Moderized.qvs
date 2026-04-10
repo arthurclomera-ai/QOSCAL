@@ -1,0 +1,516 @@
+//***************************************************************************************************************************************************
+// Author: Art Clomera
+// Date: 12/16/2019
+// Company: IPKeys Technologies, LLC
+// Function: NESSUS Load Script for .nessus files within Customer>Project>Reports/GRC.../Nessus Scans/ directory
+// STATUS: SeverityID = 'None', 'Closed', 'Open'
+//***************************************************************************************************************************************************
+Sub Nessus (vProject)
+
+
+//Don't even botherwith the rest if there are no new Nessus files
+
+if $(vNumberOfNewNessusFiles)>0 then
+let vSourceFileField    =LOOKUP('SourceNameField','FileType','Nessus','QVDFilesRouter'); //e.g. 'File_Ckl'
+
+//***************************************************************************************************************************************************
+// Loop through each Nessus file - put data into temp tables and then Concatenate to main tables
+//***************************************************************************************************************************************************
+
+//Load the NessusQVD file if there is one and then determine which source files are present.
+trace NESSUS;
+
+
+//Create a table of just the Nessus FileTypes from the QVDFilesRouter
+NessusRouter:
+NoConcatenate load
+FileType
+Resident QVDFilesRouter
+Where mid(FileType,1,LEN('Nessus'))='Nessus';
+
+FromBRouter:
+NoConcatenate Load
+Designation,
+SuffixClause
+Resident GlobalFromBStatements
+Where FileType='Nessus';
+
+//Build the the FROM statement appropriate for the file source. 
+//FROM statements comprise two parts, desgnated by vFROMA and vFROMB.
+//vFROMA refers either to the local connection path or the SharePoint connector.  This doesn't change. (As long as all local files sourced in this section are in the same directory.) 
+//vFROMB comprises the second part of the FROM statement that includes file types, etc.  This can change for each LOAD statement in this section:
+//Therefore, multiple vFROMB variables are created and numbered sequentially (e.g. vFROMB01, vFROMB02...vFROMBNN)
+//The string 'SuffixClause' here is just a place holder.
+if $(vSourceSwitch)=0 then
+//Local source
+  Let vNoOfFiles       = '$(vNumberOfNewNessusFiles)';//0;    
+elseif $(vSourceSwitch)=1 then
+//SharePoint source
+  let vFROMA='lib://$(vConnection)';
+  set vFileList=''$(vNessusfilenames);
+  let vNoOfFiles=0;
+  for Each file in $(vFileList)     //vFileList already contains filenames as filename.ext
+    if LEN('$(file)')>0 AND LEN(Lookup('$(vSourceFileField)','$(vSourceFileField)','$(file)','$(NessusQVDTable)_UniqueSource'))=0 then    
+      let vNoOfFiles=$(vNoOfFiles)+1;
+    end if
+  next file
+else
+//Anything else, just to be thorough.
+  let vFROMA='';
+  set vFileList='';
+  let vNextStatement='';
+End if //if $(vSourceSwitch)=0 then
+
+let vCompletetracker=0;
+trace Nessus call enter *******************;
+trace vNessusNewSourceFiles: $(vNessusNewSourceFiles);
+trace vFROMB: $(vFROMB);
+trace vNessusBaseDate: $(vNessusBaseDate);
+trace vNessusOffsetInt: $(vNessusOffsetInt);
+trace vNessusSourceDateFormat: $(vNessusSourceDateFormat);
+call OrganizeSourceFilesByScanDate ('$(vNessusNewSourceFiles)','Nessus','$(vFROMB)','FromBRouter',$(vNessusBaseDate),$(vNessusOffsetInt),'$(vNessusSourceDateFormat)','$(vProject)TEMPNessusFolderFiles');
+
+let vNumRows=NoOfRows('TEMP_FilesByDateSorted');
+for filerow=0 to $(vNumRows)-1
+  let file          =Peek('filename'     , $(filerow),'TEMP_FilesByDateSorted');  
+  let vfilenameclean=Peek('filenameclean', $(filerow),'TEMP_FilesByDateSorted');  
+  let vrealscandate =Peek('realscandate' , $(filerow),'TEMP_FilesByDateSorted');
+  let vDEMOscandate =Peek('DEMOscandate' , $(filerow),'TEMP_FilesByDateSorted'); 
+    if '$(vDemoSwitch)'=0 then
+      let vThisScanDate='$(vrealscandate)';
+    else 
+      let vThisScanDate='$(vDEMOscandate)';
+    end if;     
+
+let vCompletetracker=$(vCompletetracker)+1;
+
+let vIncorpMsg='*********'
+               &chr(10)&'Incorporating file: $(vfilenameclean),'
+               &chr(10)&'$(vCompletetracker)/$(vNoOfFiles) files'
+               &chr(10)&'*********';
+let vCompMsg='*********'
+             &chr(10)&'Completed file: $(vfilenameclean),'
+             &chr(10)&'$(vCompletetracker)/$(vNoOfFiles) files'
+             &chr(10)&'*********';
+
+//Plug the necessary values into the FROM statements, depending on the source
+if $(vSourceSwitch)=0 then
+  set vFROMA=$(file); 
+  Call GenerateFROMBs('$(vFROMB)','FromBRouter');//('$(vFromBBases)','$(vFromBs)','|||');
+elseif $(vSourceSwitch)=1 then 
+  let vThisURLIS=lookup('URLIS', 'Name', '$(file)', '$(vProject)TEMPNessusFolderFiles');
+  Call GenerateFROMBs('$(vFROMB)','FromBRouter','$(vThisURLIS)');//('$(vFromBBases)','$(vFromBs)','|||','$(vThisURLIS)');
+end if //if $(vSourceSwitch)=0 then
+
+trace $(vIncorpMsg);
+// ---------------------------
+// Unified Nessus Extractor
+// ---------------------------
+// Insert this block into your Nessus subroutine where file processing occurs.
+// It expects vFROMA (file/connection path) and vFROMB0x variables available,
+// OR you can set vFROMA directly to a single file for testing.
+// Example for single-file testing:
+// let vFROMA='file:///mnt/data/CDM FTII-Cloud Prod RHEL 7 (1754407259).nessus';
+
+// ---------------------------
+// 1) Empty table initialization (prevent "table not found")
+// ---------------------------
+Compliance_XML:
+LOAD
+    '' AS SourceFile,
+    '' AS ReportHost,
+    '' AS ReportItem,
+    '' AS ComplianceResult
+WHERE 1=0;
+
+Compliance_Output:
+LOAD
+    '' AS SourceFile,
+    '' AS ReportHost,
+    '' AS ReportItem,
+    '' AS ComplianceResult
+WHERE 1=0;
+
+NessusCompliance:
+LOAD
+    '' AS SourceFile,
+    '' AS ReportHost,
+    '' AS ReportItem,
+    '' AS ComplianceResult
+WHERE 1=0;
+
+HostOS:
+LOAD
+    '' AS ReportHost,
+    '' AS OperatingSystem
+WHERE 1=0;
+
+SoftwareInventory_Raw:
+LOAD
+    '' AS ReportHost,
+    '' AS Vendor,
+    '' AS Product,
+    '' AS Version
+WHERE 1=0;
+
+SoftwareInventory_Clean:
+LOAD
+    '' AS ReportHost,
+    '' AS Software,
+    '' AS Version
+WHERE 1=0;
+
+HostSoftwareOS:
+LOAD
+    '' AS ReportHost,
+    '' AS Software,
+    '' AS Version,
+    '' AS OperatingSystem
+WHERE 1=0;
+
+// ---------------------------
+// 2) Load the ReportItem nodes from Nessus XML (adjust vFROMB03 if needed)
+// ---------------------------
+// If you're inside your existing For Each file loop, you already set vFROMA to the current file
+// and generated vFROMB03. If testing standalone, set vFROMA to a file url and define vFROMB03 appropriately.
+NessusRaw:
+LOAD
+    '$(vFROMA)' as SourceFile,
+    @1:n as ReportHost,
+    @2:n as ReportItem,
+    @3:n as Tag,
+    @4:n as TagValue
+FROM [$(vFROMA)]
+// $(vFROMB03)
+(XmlSimple, table is [NessusClientData_v2/Report/ReportHost/ReportItem/*]);
+
+// ---------------------------
+// 3) Compliance extraction
+//   - Case A: <compliance-result> XML tag
+//   - Case B: Text inside plugin_output containing "Compliance Result:"
+// ---------------------------
+//Debug Tip (very useful)
+TRACE Tables loaded so far:;
+FOR i = 0 to NoOfTables()-1
+    TRACE $(i): $(TableName($(i)));
+NEXT i;
+
+Concatenate (Compliance_XML)
+LOAD
+    SourceFile,
+    ReportHost,
+    ReportItem,
+    TagValue as ComplianceResult
+Resident NessusRaw
+Where lower(Tag) = 'compliance-result';
+
+Concatenate (Compliance_Output)
+LOAD
+    SourceFile,
+    ReportHost,
+    ReportItem,
+    // Extract `Compliance Result:` text until linebreak — fall back to the whole TagValue trimmed
+    If(WildMatch(TagValue,'*Compliance Result:*'),
+       Trim(TextBetween(TagValue,'Compliance Result:',chr(10))),
+       Trim(TagValue)
+    ) as ComplianceResult
+Resident NessusRaw
+Where lower(Tag) = 'plugin_output'
+  and WildMatch(TagValue,'*Compliance Result:*');
+
+// Normalize into final NessusCompliance
+Concatenate (NessusCompliance)
+LOAD
+    SourceFile,
+    ReportHost,
+    ReportItem,
+    Trim(ComplianceResult) as ComplianceResult
+Resident Compliance_XML
+Where Len(Trim(ComplianceResult))>0;
+
+Concatenate (NessusCompliance)
+LOAD
+    SourceFile,
+    ReportHost,
+    ReportItem,
+    Trim(ComplianceResult) as ComplianceResult
+Resident Compliance_Output
+Where Len(Trim(ComplianceResult))>0;
+
+// ---------------------------
+// Ensure HostOS table exists
+// ---------------------------
+HostOS:
+LOAD
+    '' as ReportHost,
+    '' as OperatingSystem
+AutoGenerate 0;
+
+
+// ---------------------------
+// 4) OS discovery
+//   - tags such as 'os' or 'operating-system'
+//   - plugin 11936 fallback
+// ---------------------------
+
+Concatenate (HostOS)
+LOAD DISTINCT
+    ReportHost,
+    Trim(TagValue) as OperatingSystem
+Resident NessusRaw
+Where lower(Tag) = 'operating-system'
+   or lower(Tag) = 'os'
+   or WildMatch(lower(TagValue),
+                '*windows*','*linux*','*ubuntu*','*centos*',
+                '*debian*','*red hat*','*amazon*','*esxi*');
+
+
+// ---- plugin 11936 fallback ----
+TEMP_OS_From11936:
+LOAD
+    ReportHost,
+    Trim(TextBetween(TagValue, ':', chr(10), 1)) as OS11936
+Resident NessusRaw
+Where lower(Tag) = 'plugin_output'
+  and WildMatch(TagValue, '*11936*') = 0;   // keep plugin-output but avoid matching numeric-only 11936 text
+
+
+Concatenate (HostOS)
+LOAD
+    ReportHost,
+    OS11936 as OperatingSystem
+Resident TEMP_OS_From11936
+Where Len(Trim(OS11936)) > 0;
+
+DROP TABLE TEMP_OS_From11936;
+
+// ---------------------------
+// 5) Software extraction
+//   - CPE tags (preferred structured source)
+//   - plugin_output patterns (Application / Software + Version)
+//   - special handling: Linux RPM pipe-delimited strings (name-version-release|...)
+// ---------------------------
+
+// 5a) CPEs
+CPE_Extract:
+LOAD
+    SourceFile,
+    ReportHost,
+    TagValue as RawCPE,
+    SubField(TagValue, '/', 3) as CPE_Type,
+    SubField(TagValue, ':', 3) as CPE_Vendor,
+    SubField(TagValue, ':', 4) as CPE_Product,
+    SubField(TagValue, ':', 5) as CPE_Version
+Resident NessusRaw
+Where lower(Tag) = 'cpe';
+
+// Append to raw software inventory
+Concatenate (SoftwareInventory_Raw)
+LOAD
+    ReportHost,
+    Lower(CPE_Vendor) as Vendor,
+    Lower(CPE_Product) as Product,
+    CPE_Version as Version
+Resident CPE_Extract
+Where Len(Trim(CPE_Product))>0;
+
+// 5b) plugin_output based extraction (common patterns)
+Plugin_Extract:
+LOAD
+    SourceFile,
+    ReportHost,
+    TagValue as PluginOutput,
+    // common patterns - account for variants and trim
+    Trim( Coalesce(
+        TextBetween(TagValue, 'Application :', chr(10)),
+        TextBetween(TagValue, 'Application:', chr(10)),
+        TextBetween(TagValue, 'Software:', chr(10)),
+        TextBetween(TagValue, 'Package:', chr(10))
+    )) as SoftwareProduct,
+
+    Trim( Coalesce(
+        TextBetween(TagValue, 'Installed version :', chr(10)),
+        TextBetween(TagValue, 'Installed Version :', chr(10)),
+        TextBetween(TagValue, 'Version:', chr(10)),
+        TextBetween(TagValue, '[version',']',1) // fallback if version is in brackets
+    )) as SoftwareVersion
+Resident NessusRaw
+Where lower(Tag) = 'plugin_output'
+  and ( WildMatch(lower(TagValue),'*application*') or WildMatch(lower(TagValue),'*installed version*') or WildMatch(lower(TagValue),'*software*') );
+
+// Append plugin found items to raw inventory
+Concatenate (SoftwareInventory_Raw)
+LOAD
+    ReportHost,
+    Null() as Vendor,
+    Lower(SoftwareProduct) as Product,
+    SoftwareVersion as Version
+Resident Plugin_Extract
+Where Len(Trim(SoftwareProduct))>0 and Len(Trim(SoftwareVersion))>0;
+
+// 5c) Linux RPM strings: handle `name-version-release|...` entries
+// Many RPM plugin outputs include lines like:
+//   python3-jsonschema-2.6.0-4.el8|(none) Sat Oct 31 01:03:21 2020|Red Hat, Inc.|...
+//
+// Strategy: take text before first pipe (|) then split the final `-` segment(s) to extract version.
+LinuxPkgCandidates:
+LOAD
+    SourceFile,
+    ReportHost,
+    // Candidate line: first field before first pipe
+    SubField(Trim(PluginOutput), '|', 1) as RawLinuxPkg
+Resident Plugin_Extract
+Where WildMatch(PluginOutput, '*|*') and Len(Trim(PluginOutput))>0;
+
+/// Step 1: Extract version (last dash section)
+VersionCandidate:
+LOAD
+    ReportHost,
+    RawLinuxPkg,
+    SubField(RawLinuxPkg, '-', -1) as VersionCandidate
+Resident LinuxPkgCandidates
+Where Len(Trim(RawLinuxPkg))>0;
+
+
+// Step 2: Extract software name (everything before last dash)
+LinuxPkgNormalized:
+LOAD
+    ReportHost,
+    RawLinuxPkg,
+    VersionCandidate,
+    Left(RawLinuxPkg, Len(RawLinuxPkg) - Len(VersionCandidate) - 1) as Software
+Resident VersionCandidate;
+
+
+// Clean up
+DROP TABLE VersionCandidate;
+
+
+// Now append Linux normalized records
+Concatenate (SoftwareInventory_Raw)
+LOAD
+    ReportHost,
+    Null() as Vendor,
+    Lower(SoftwareNameCandidate) as Product,
+    VersionCandidate as Version
+Resident LinuxPkgNormalized
+Where Len(Trim(SoftwareNameCandidate))>0 and Len(Trim(VersionCandidate))>0;
+
+// ---------------------------
+// 6) Build Clean Software Inventory (dedupe & normalize)
+// ---------------------------
+
+SoftwareInventory_Clean:
+NoConcatenate
+LOAD DISTINCT
+    ReportHost,
+    // Basic normalization: collapse multiple whitespace, capitalize for display
+    Capitalize(Trim(Product)) as Software,
+    Trim(Version) as Version
+Resident SoftwareInventory_Raw
+Where Len(Trim(Product))>0 and Len(Trim(Version))>0;
+
+// ---------------------------
+// 7) Merge OS with Software to produce HostSoftwareOS
+// ---------------------------
+
+// 1. Create base table (software inventory)
+HostSoftwareOS:
+NoConcatenate
+LOAD
+    ReportHost,
+    Software,
+    Version
+Resident SoftwareInventory_Clean;
+
+// 2. Left Join the OS data
+LEFT JOIN (HostSoftwareOS)
+LOAD
+    ReportHost,
+    OperatingSystem
+Resident HostOS;
+
+// 3. Drop intermediate tables if needed
+DROP TABLE HostOS;
+
+// ---------------------------
+// 8) Store final QVDs (adjust store path as required)
+// ---------------------------
+
+STORE NessusCompliance INTO [$(vProject)NessusCompliance.qvd] (qvd);
+STORE SoftwareInventory_Clean INTO [$(vProject)NessusSoftwareInventory.qvd] (qvd);
+STORE HostSoftwareOS INTO [$(vProject)NessusHostSoftwareOS.qvd] (qvd);
+//Now all required rows for the updated Nessus type QVDs are contained in the respectice tables. 
+//A [Status] column must be added to record which row are "Open" and which are "Closed"
+//Each unique IP address will be consisdered.  For all rows with a given IP address, those with the latest scan date will be marked "Open"
+//All other rows with the same IP address will be marked "Closed"
+// If '$(vNumRows)'>0 then
+//   Call CreateSortTable('$(NessusQVDTable)','TEMP_NessusByIpByDate','[IP Address] asc, [Scan Date] desc');  //Create table TEMP_NessusByIpByDate from table $(NessusQVDTable)
+
+//   TEMP_ScanDateIPStatus:   //[IP Address] + [Scan Date] combinations with latest scan date and [Status] set to 'Open'
+//     Noconcatenate Load
+//       [IP Address],
+//       [Scan Date],
+//       'Open' as STATUS
+//     Resident TEMP_NessusByIpByDate
+//     Where [IP Address]<>Previous([IP Address]);
+  
+//     Load                //[IP Address] + [Scan Date] combinations with all but latest scan dates and [Status] set to 'Closed'
+//      [IP Address],
+//       [Scan Date],
+//       'Closed' as STATUS
+//     Resident TEMP_NessusByIpByDate
+//     Where [IP Address]=Previous([IP Address]) and [Scan Date]<>Previous([Scan Date]);
+
+//   Left join ($(NessusQVDTable))
+//   Load
+//   *
+//   Resident TEMP_ScanDateIPStatus;
+
+
+//   call DropATable('TEMP_ScanDateIPStatus');
+//   call DropATable('TEMP_NessusByIpByDate');
+
+// end if //If '$(vNumRows)'>0 then
+
+// ---------------------------
+// 9) Clean up temporary tables (safe drops)
+// ---------------------------
+// Only drop temp tables that we created in this block. Keep main QVD tables (NessusQVDTable etc.) intact.
+DROP Tables NessusRaw, CPE_Extract, Plugin_Extract, LinuxPkgCandidates, LinuxPkgNormalized, SoftwareInventory_Raw, SoftwareInventory_Clean, Compliance_XML, Compliance_Output, NessusCompliance, HostOS;
+
+// Note: if any of the named tables do not exist the DROP will not error because we created empty starters at top.
+// ---------------------------
+// End unified extraction block
+// ---------------------------
+
+for nessustypes=0 to NoOfRows('NessusRouter')-1
+  let vThisType     =PEEK('FileType' ,'$(nessustypes)','NessusRouter');                 //e.g. NessusPPSM
+  let vThisTableName=LOOKUP('QVDTableName','FileType','$(vThisType)','QVDFilesRouter'); //e.g. NessusSoftwareQVDTable
+  let vThisStorePath=LOOKUP('StorePath'   ,'FileType','$(vThisType)','StorePaths');
+  Call StoreATable('$(vThisTableName)','lib://$(vThisStorePath)','1');
+  Call DropATable('$(vThisTableName)_UniqueSource');   
+next nessustypes;
+if $(vNumRows)>0 AND $(vNoOfFiles)>0 THEN 
+//***************************************************************************************************************************************************
+//  concatenate the new files to the QVDs.
+//***************************************************************************************************************************************************
+	trace there are new Nessus files $(vStorePathNessus);
+    trace The $(NessusQVDTable) QVD written with $(vNumRows) Rows!;
+    trace The $(NessusPPSMQVDTable) QVD written with $(vNumPPSMRows) Rows!;   
+    trace The $(NessusSoftwareQVDTable) QVD written with $(vNumSoftwareRows) Rows!;  
+
+else 
+//***************************************************************************************************************************************************
+// there are no new files to concatenate.
+//***************************************************************************************************************************************************
+	trace  there are no new Nessus files for $(vProject);
+end if //if NoOfRows('$(vDataTableName)')>0 AND $(vNoOfFiles)>0 THEN 
+
+drop table FromBRouter;
+drop table NessusRouter;
+// end if //if $(vNumberOfNewNessusFiles)<>-1 then
+
+Call DropATable ('$(vProject)TEMPNessusFolderFiles');
+
+END Sub

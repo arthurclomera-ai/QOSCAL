@@ -1,0 +1,177 @@
+//***************************************************************************************************************************************************
+// Author: Art Clomera
+// Date: 8/12/2025
+// Company: Art Clomera Consulting
+// Function: Burp Load Script for .xml files within Customer>Project>Reports/DAST.../Burp/ directory
+//***************************************************************************************************************************************************
+Sub Burp (vProject)
+//Don't even bother with the rest of this section if there are no Burp files
+if $(vNumberOfNewBurpFiles)>0 then
+let vSourceFileField=LOOKUP('SourceNameField','FileType','Burp','QVDFilesRouter'); //e.g. 'File_Ckl'
+
+//***************************************************************************************************************************************************
+// Loop through each Burp file
+//***************************************************************************************************************************************************
+
+trace Burp;
+
+//Create a table of just the Nessus FileTypes from the QVDFilesRouter
+
+FromBRouter:
+NoConcatenate Load
+Designation,
+SuffixClause
+Resident GlobalFromBStatements
+Where FileType='Burp';
+ 
+        
+//Build the the FROM statement appropriate for the file source. 
+//FROM statements comprise two parts, desgnated by vFROMA and vFROMB.
+  //vFROMA refers either to the local connection path or the SharePoint connector.  This doesn't change. (As long as all local files sourced in this section are in the same directory.) 
+  //vFROMB comprises the second part of the FROM statement that includes file types, etc.  This can change for each LOAD statement in this section:
+    //Therefore, multiple vFROMB variables are created and numbered sequentially (e.g. vFROMB01, vFROMB02...vFROMBNN)
+//The string 'SuffixClause' here is just a place holder
+if $(vSourceSwitch)=0 then
+trace Burp vSourceSwitch = 0 *******************;
+//Local source
+  Let vNoOfFiles = '$(vNumberOfNewBurpFiles)'; 
+
+elseif $(vSourceSwitch)=1 then
+trace Burp vSourceSwitch = 1*******************;
+//SharePoint source
+  let vFROMA='lib://$(vConnection)';
+  set vFileList=''$(vBurpfilenames);
+  let vNoOfFiles=0;
+  for Each file in $(vFileList)     //vFileList already contains filenames as filename.ext
+    if LEN('$(file)')>0 AND LEN(Lookup('$(vSourceFileField)','$(vSourceFileField)','$(file)','$(vDataTableName)_UniqueSource'))=0 then    
+      let vNoOfFiles=$(vNoOfFiles)+1;
+    end if
+  next file
+else
+//Anything else, just to be thorough.
+trace Burp else *******************;
+  let vFROMA='';
+  set vFileList='';
+  let vNextStatement='';
+End if
+
+let vCompletetracker=0;
+trace Burp call enter *******************;
+call OrganizeSourceFilesByScanDate ('$(vBurpNewSourceFiles)','Burp','$(vFROMB)','FromBRouter',$(vBurpBaseDate),$(vBurpOffsetInt),'$(vBurpSourceDateFormat)','$(vProject)TEMPBurpFolderFiles');
+trace Burp call exit*******************;
+let vNumRows        =NoOfRows('$(BurpQVDTable)'); 
+trace Burp vNumRows = *******************;
+//let vNumRows=NoOfRows('TEMP_FilesByDateSorted');
+for filerow=0 to $(vNumRows)-1
+trace Burp filerow = *******************;
+  let file         =Peek('filename'    , $(filerow),'TEMP_FilesByDateSorted');
+  let vrealscandate=Peek('realscandate', $(filerow),'TEMP_FilesByDateSorted');
+  let vDEMOscandate=Peek('DEMOscandate', $(filerow),'TEMP_FilesByDateSorted');  
+    if '$(vDemoSwitch)'=0 then
+      let vThisScanDate='$(vrealscandate)';
+    else 
+      let vThisScanDate='$(vDEMOscandate)';
+    end if;     
+if '$(vSourceSwitch)'=0 then
+  call FileNameFromFilePath ('$(file)');   //creates variable vFilenameclean = filename.ext 
+else 
+  let vFilenameclean='$(file)';
+end if //if '$(vSourceSwitch)'=0 then
+
+let vCompletetracker=$(vCompletetracker)+1;
+
+let vIncorpMsg='*********'
+               &chr(10)&'Incorporating file: $(vFilenameclean),'
+               &chr(10)&'$(vCompletetracker)/$(vNoOfFiles) files'
+               &chr(10)&'*********';
+let vCompMsg='*********'
+             &chr(10)&'Completed file: $(vFilenameclean),'
+             &chr(10)&'$(vCompletetracker)/$(vNoOfFiles) files'
+             &chr(10)&'*********';
+
+//Plug the necessary values into the FROM statements, depending on the source
+if $(vSourceSwitch)=0 then
+  set vFROMA=$(file);
+  Call GenerateFROMBs('$(vFROMB)','FromBRouter');                      
+elseif $(vSourceSwitch)=1 then 
+  let vThisURLIS=lookup('URLIS', 'Name', '$(file)', '$(vProject)TEMPBurpFolderFiles');
+  Call GenerateFROMBs('$(vFROMB)','FromBRouter','$(vThisURLIS)');   
+end if //if $(vSourceSwitch)=0 then
+
+trace $(vIncorpMsg);
+
+// build Burp QVD
+[$(vDataTableName)_Temp]:
+LOAD  
+    serialNumber,
+    "type" as VulID,
+    name as VulName,
+//    host as Hostname,
+    '$(vProject)' & host  as ProgramHostID,
+    path as VulPath,
+    location as VulLocation,
+    severity as SeverityID,
+    confidence,
+    issueBackground as Synopsis,
+    remediationBackground as Recommendation,
+    issueDetail,
+    remediationDetail,
+    "issueDetailItems/issueDetailItem" as FINDING_DETAILS,
+    "host/ip" as [IP Address],
+    'Open' as STATUS,
+    'SCM' as Comp,
+    'N/A' as OS,
+     if ('$(vSourceSwitch)'=0,'$(file)',filename()) as $(vSourceFileField),
+     %Key_issues_681B48D2478A443D as HostKeyID
+//     %Key_issue_37EAC3685375DE0F
+FROM [$(vFROMA)]
+$(vFROMB01);
+
+join ([$(vDataTableName)_Temp])
+Load Distinct
+     burpVersion,
+     exportTime as [Scan Date],
+     %Key_issues_681B48D2478A443D as HostKeyID
+FROM [$(vFROMA)]
+$(vFROMB02);
+
+//If the main data table has not been created, then rename the Temp table to the main table. Otherwise, concatenate.
+IF ALT(NoOfRows('$(vDataTableName)'),-1)= -1 THEN
+  RENAME TABLE [$(vDataTableName)_Temp] to [$(vDataTableName)];
+ELSE
+  CONCATENATE ([$(vDataTableName)])
+  LOAD * RESIDENT [$(vDataTableName)_Temp];
+  drop table $(vDataTableName)_Temp;
+END IF; 
+
+trace $(vCompMsg);
+next filerow;
+
+
+
+Call DropATable ('TEMP_FilesByDateSorted');
+//***************************************************************************************************************************************************
+//  The if statement below is a check to see if the table from the script below.  
+//	The script above will run regardless, however, if no Burp files are found, the "Burp_Temp" table will not be created.
+//***************************************************************************************************************************************************
+
+//If there is an actual data table created AND there were new source files to add, then write the QVD
+Call StoreATable ('$(vDataTableName)','lib://$(vStorePathBurp)','1');
+if NoOfRows('$(vDataTableName)')>0 AND $(vNoOfFiles)>0 THEN //if vConcatenate >0 Then
+//***************************************************************************************************************************************************
+//  concatenate the new files to the QVDs.
+//***************************************************************************************************************************************************
+
+trace Burp QVD stored: lib://$(vStorePathBurp);
+else
+//***************************************************************************************************************************************************
+// there are no new files to concatenate.
+//***************************************************************************************************************************************************
+trace No new Burp File exists for $(vProject);
+end if;  //NoOfRows('$(vDataTableName)')>0 AND $(vNoOfFiles)>0 THEN
+
+Call DropATable ('$(vDataTableName)_UniqueSource');
+Call DropATable ('$(vProject)TEMPBurpFolderFiles');
+drop table FromBRouter;
+end if //if $(vNumberOfNewBurpFiles)<>-1 then
+end sub

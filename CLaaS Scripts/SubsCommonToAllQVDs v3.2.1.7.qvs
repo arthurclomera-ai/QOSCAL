@@ -1,0 +1,312 @@
+////////////////////
+////////SUB ROUTINE
+////////////////////
+Sub GenerateFROMBs (FromB,FromBBaseTable)
+//PARAMETERS
+  //FromB          : String- The initial FROMB expression from which all final FROMB's (e.g. FROMB01, FROMB02, etc) will be built 
+  //                 Assumed to have a placeholder substring "SuffixClause" 
+  //FromBBaseTable : String- The name of the FromBRouter table to be used to build the FROMB expressions. 
+  //                         Derived from the table GlobalFromBStatements and assumed to have fields "Designation" and "SuffixClause"
+//Output
+  //A series of variables names for the "Designation" values in FromBBaseTable with values as strings of the final assessed FROMB expression.
+  //e.g. vFROMB01='XmlSimple, table is NessusClientData_v2'
+  //     vFROMB02='XmlSimple, table is [NessusClientData_v2/Report/ReportHost]'
+  //  or in the case of SharePoint Mode
+  //     vFROMB01='(URL IS[>>SP Url<<],XmlSimple, table is NessusClientData_v2)'
+trace FromBBaseTable: $(FromBBaseTable);
+  let vFromBRouterRows=NoOfRows('$(FromBBaseTable)');
+trace vFromBRouterRows: $(vFromBRouterRows);
+  for routerrow=0 to $(vFromBRouterRows)-1
+    let vThisDesig =PEEK('Designation' ,$(routerrow),'$(FromBBaseTable)');  //e.g. 'FROMB01'
+    Trace vThisDesig: $(vThisDesig);
+    let vThisSuffix=PEEK('SuffixClause',$(routerrow),'$(FromBBaseTable)'); //e.g. 'XmlSimple, table is NessusClientData_v2'
+    Trace vThisSuffix: $(vThisSuffix);
+    let vThisBase  =Replace('$(FromB)','SuffixClause','$(vThisSuffix)');
+    Trace vThisBase: $(vThisBase);
+    let $(vThisDesig)='$(vThisBase)';     
+    trace vThisDesig: $(vThisDesig);
+  next routerrow;
+  
+End Sub; //GenerateFROMBs
+////////////////////
+////////END SUB ROUTINE 
+////////////////////
+
+
+
+
+
+
+////////////////////
+////////SUB ROUTINE 
+////////////////////
+Sub OrganizeSourceFilesByScanDate (FileTable,FileType,FromB,FromBRouter,DEMOScanBaseDate,DEMOScanInterval,SourceFileDateFormat, SPFileTable)
+trace ***************entering OrganizeSourceFilesByScanDate*********************
+trace **************************FileTable: $(FileTable);
+trace **************************FileType: $(FileType);
+trace **************************FromB: $(FromB);
+trace **************************FromBRouter: $(FromBRouter);
+trace **************************DEMOScanBaseDate: $(DEMOScanBaseDate);
+trace **************************DEMOScanInterval: $(DEMOScanInterval);
+trace **************************SourceFileDateFormat: $(SourceFileDateFormat);
+trace **************************SPFileTable: $(SPFileTable);
+//Do an initial look through the source files and create a table organizing them by scan date
+//"Returns" a table called TEMP_FilesByDateSorted containing fields:
+//        filename
+//        filenameclean
+//        realscandate
+//        DEMOscanDate
+//DEMOScandate values will descend according to the realscan dates.  So that the filename with the earliest realscandate also has the earliest DEMOscandate and 
+//                                                                           the filename with the latest   realscandate also has the latest   DEMOscandate
+//and all the dates in between ascend acordingly (second-earliest realscandate to second-earliest DEMOscandate, and so on)
+//The whole point is to load the source files into the QVD in the same date order no matter whether real dates or demo dates are used.
+//PARAMETERS
+  //FileTable          :The name of the table containing . . .
+  //FileType           :Must be one of the following, corresponding to the file type section from which the call is made: 
+  //                      'Nessus'
+  //                      'CheckList'
+  //                       'Burp'
+  //                       'RHACS'
+  //                       'Prisma'
+  //                       'Inspector'
+  //                      'Fortify*'   i.e. something that starts with 'Fortify'
+  //                      'SCAP'
+  //FromB
+  //FromBRouter
+
+  //                      e.g. for the above example values, this must be set to '|||'                  
+  //DEMOScanBaseDate   :The basedate for DEMO scan dates defined for the filetype on the Main tab.  The earliest source file will get this date as its DEMOscandate  
+  //                      e.g. for a Nessus file this is vNessusBaseDate
+  //DEMOScanInterval   :The DEMO scan date interval defined for the file type on the Main tab. Every source file after the first will get a DEMOscandate this many days later than the previous one.
+  //                      e.g. for Nessus files this is vNessusOffsetInt
+  //SourceFileDateFormat: The format of the desired dates as they appear in the actual source document text or xml (e.g. 'YYYY/MM/D')
+  //SPFileTable        :A table containing connection strings to the Sharepoint library containing source files, as generated on the SharePoint section for each file type
+  //                      e.g. for Nessus files, this is $(vProject)TEMPNessusFolderFiles
+
+let vFortifycheck =Mid('$(FileType)', 1,LEN('Fortify'));  //For 'Fortify*' file types, this will be 'Fortify'. All others will be the first 7 chaacters of $(FileType)
+                                                          //This is used to identify Fortify files, which require special handling. 
+let vSourceFileKey=LOOKUP('SourceFileRouterKey','FileType','$(FileType)','QVDFilesRouter');  //e.g. "Nessus" or "FortifyXML"  
+//These cannot be defined in the SourceFileRouter table.  
+//For whatever reason, Qlik jsut doesn't like using them from a table value
+//Probly has something to do with the ASCII chars
+if '$(FileType)'='Nessus' then 
+    let vWhereStatement='$(vNessusDatesWhereStatement)'; //'Where match(pluginID,'&chr(39)&'19506'&chr(39)&')'
+elseif '$(FileType)'='SCAP' then
+    let vWhereStatement='$(vSCAPDatesWhereStatement)';
+elseif '$(FileType)'='CheckList' then
+    let vWhereStatement='$(vCheckListDatesWhereStatement)';
+elseif '$(FileType)'='Burp' then
+    let vWhereStatement='$(vBurpDatesWhereStatement)';
+elseif '$(FileType)'='RHACS' then
+    let vWhereStatement='';
+elseif '$(FileType)'='Prisma' then
+    let vWhereStatement='';
+elseif '$(FileType)'='Inspector' then
+    let vWhereStatement='';
+elseif '$(vFortifycheck)'='Fortify' then  
+    let vWhereStatement='Put anything you want in here.  The Fortify Where statement is hardcoded below.';
+end if
+
+let vSourceFileField    =LOOKUP('SourceNameField','FileType','$(FileType)','QVDFilesRouter'); //e.g. 'File_Ckl'
+trace *****************is this FileCkl? ****************;
+trace vSourceFileField: $(vSourceFileField);
+TEMP_FilesByDate:
+Noconcatenate load 
+*
+Inline [filename, filenameclean, realscandate];
+
+let vDEMOscandate=$(DEMOScanBaseDate);
+let vDEMOinterval=$(DEMOScanInterval);
+
+
+let vFileRows=ALT(NoOfRows('$(FileTable)')-1,-1);
+
+for filerow=0 to '$(vFileRows)'
+if '$(vSourceSwitch)'=0 then  //local source
+  let file=PEEK('File','$(filerow)','$(FileTable)');
+else                         //SharePoint source - file will match filenameclean
+  let file=PEEK('Name','$(filerow)','$(FileTable)');
+end if 
+let vfilenameclean=PEEK('Name','$(filerow)','$(FileTable)');
+trace ******************file: $(file)********************;
+trace ******************vfilenameclean: $(vfilenameclean)********************;
+
+if LEN('$(file)')>0 then
+  if $(vSourceSwitch)=0 then
+    set vFROMA=$(file); 
+    Call GenerateFROMBs('$(FromB)','FromBRouter');  
+ 
+    let vReportId = AutoNumberHash128('$(file)');
+  elseif $(vSourceSwitch)=1 then 
+    //There is not a plain "Fortify" on the SourceFileRouter table, but all the Fortifies have the same file path.  
+    //Therefore, all Fortify type files will reference the filepath for of FileType = FortifyXML from the SourceFileRouter table
+    if '$(vFortifycheck)'='Fortify' then  
+      let vthisfolderpath = Lookup('SourceFilePath','FileType','FortifyXML','SourceFileRouter');                                          //
+    else  //Otherwise, just look up directly off the FileType
+      let vthisfolderpath = Lookup('SourceFilePath','FileType','$(FileType)','SourceFileRouter');  //e.g. Reports/GRC Reports/Nessus Scans
+    end if
+    let vFROMA = 'lib://$(vSPConnector)/$(vLibraryEntityTypeName)/$(vProject)/$(vthisfolderpath)/$(vfilenameclean)';
+    Call GenerateFROMBs('$(FromB)','FromBRouter');//,'$(vThisURLIS)');
+    let vReportId =lookup('UniqueId', 'Name', '$(file)', '$(SPFileTable)');
+  end if 
+
+let vFROMBStatement=lookup('ScanDateFROMB','FileType','$(FileType)','SourceFileRouter');
+trace ScanDateFROMB: $(ScanDateFROMB);
+trace FileType: $(FileType);
+trace vFROMBStatement: $(vFROMBStatement);
+trace $(vFROMBStatement): $($(vFROMBStatement));
+
+//let vFROMBStatement=lookup('ScanDateFROMB','FileType','$(FileType)','QVDFilesRouter');
+
+//Create a NEWFILE table for each file, add it to TEMP_FilesByDate, then drop it. Create a new one for hte next file and keep going. 
+//There is a special method for creating the NEWFILE table for Fortify files. 
+
+if '$(vFortifycheck)'='Fortify' then 
+Temp_NEWFILE:
+NOCONCATENATE LOAD 
+      '$(vReportId)' & '.' & [%Key_ReportDefinition_D38E92F88AA9C4B5] as [Temp Report Join Key],    
+      '$(vReportId)' & '.' & [%Key_ReportSection_0A13AF0291BE5511] as [Temp Report Section Join Key],    
+      Title as [Section Title]
+FROM [$(vFROMA)]
+$(vFROMB04);
+
+
+Left Join (Temp_NEWFILE)
+  LOAD
+      '$(vReportId)' & '.' & [%Key_ReportSection_0A13AF0291BE5511] as [Temp Report Section Join Key],    
+      '$(vReportId)' & '.' & [%Key_SubSection_491A4E27BB7F97F9] as [Temp Sub Section Join Key],    
+      Text as [SubSection Text]
+FROM [$(vFROMA)]
+$(vFROMB01);
+
+Trace Line 148;
+NEWFILE: 
+Noconcatenate load 
+  '$(file)' as filename,
+  '$(vfilenameclean)' as filenameclean,
+  Num(Date#(TextBetween([SubSection Text],'On ',', a source code review'),'$(SourceFileDateFormat)')) as realscandate
+RESIDENT Temp_NEWFILE 
+Where [Section Title] = 'Report Overview'
+And Len([SubSection Text]) > 0;
+
+Call DropATable ('Temp_NEWFILE');
+
+ELSEIF '$(FileType)'='RHACS' THEN
+NEWFILE:
+Noconcatenate load
+  '$(file)' as filename,
+  '$(vfilenameclean)' as filenameclean,
+   Num(date#([First Seen]),'$(SourceFileDateFormat)') as realscandate                 
+FROM [$(vFROMA)]
+$($(vFROMBStatement));
+ELSEIF '$(FileType)'='Prisma' THEN
+Trace **************DO SOMETHING PRISMA*****************;
+NEWFILE:
+Noconcatenate load
+  '$(file)' as filename,
+  '$(vfilenameclean)' as filenameclean,
+   Num(date#(Discovered),'$(SourceFileDateFormat)') as realscandate                 
+FROM [$(vFROMA)]
+$($(vFROMBStatement));
+ELSEIF '$(FileType)'='Inspector' THEN
+Trace **************DO SOMETHING Inspector*****************;
+NEWFILE:
+Noconcatenate load
+  '$(file)' as filename,
+  '$(vfilenameclean)' as filenameclean,
+   Num(date#([Last Updated]),'$(SourceFileDateFormat)') as realscandate                 
+FROM [$(vFROMA)]
+$($(vFROMBStatement));
+ELSEIF '$(FileType)'='Burp' THEN
+Trace **************DO SOMETHING Burp*****************;
+NEWFILE:
+Noconcatenate load
+  '$(file)' as filename,
+  '$(vfilenameclean)' as filenameclean,
+   Num(date#(exportTime),'$(SourceFileDateFormat)') as realscandate                 
+FROM [$(vFROMA)]
+$(vFROMB02);
+
+else //All others besides Fortify
+trace line 161;
+NEWFILE:
+Noconcatenate load
+  '$(file)' as filename,
+  '$(vfilenameclean)' as filenameclean,
+   if('$(FileType)'='Nessus',   Num(date#(subfield(subfield(plugin_output,'Scan Start Date : ',2),' ',1),'$(SourceFileDateFormat)')),
+   if('$(FileType)'='SCAP',     Num(date#(SubField([TestResult/start-time], 'T', 1),'$(SourceFileDateFormat)')),
+   if('$(FileType)'='CheckList',Num(Date(FLOOR(filetime()),'$(SourceFileDateFormat)'))))) as realscandate                 
+FROM [$(vFROMA)]
+$($(vFROMBStatement)) $(vWhereStatement);
+
+end if; // else of if '$(vFortifycheck)'='Fortify' then...else...
+
+//The Where statements might pull multiple identical XML elements from the source file, resulting in a NEWFILE table with multiple identical rows.  
+//Only one row is desired for the NEWFILE table.  
+//For instance, a single Nessus file might result in a NEWFILE table with 72 identical rows, because there are 72 <ReportItem>s where pluginid=19506.
+//Therefore, the DISTINCT load is crucial for adding NEWFILE to the TEMP_FilesByDate table. The 72 identical rows must become a single row. 
+
+Concatenate (TEMP_FilesByDate)
+LOAD 
+  DISTINCT [realscandate],filename, filenameclean
+RESIDENT NEWFILE;
+
+Drop TABLE NEWFILE;
+end if
+
+next filerow
+
+
+Call CreateSortTable ('TEMP_FilesByDate', 'TEMP_FilesByDateSorted_0', 'realscandate desc,filename asc');
+
+Drop Table TEMP_FilesByDate;
+
+TEMP_DEMOdates:
+Noconcatenate Load
+*
+inline
+[filename,DEMOscandate];
+
+
+let NoFilesByDateRows=NoOfRows('TEMP_FilesByDateSorted_0');
+let vlastrealscandate=PEEK('realscandate',0,'TEMP_FilesByDateSorted_0'); //Initial vlastrealscandate is the first date listed in descending order
+for i=0 to $(NoFilesByDateRows)-1
+  let vThisfilename=Peek('filename'    , '$(i)', 'TEMP_FilesByDateSorted_0');
+  let vThisscandate=Peek('realscandate', '$(i)', 'TEMP_FilesByDateSorted_0');
+    if '$(vThisscandate)'<'$(vlastrealscandate)' then
+      let vDEMOscandate=$(vDEMOscandate)-$(vDEMOinterval);
+      let vlastrealscandate='$(vThisscandate)';
+    end if
+
+Concatenate
+LOAD
+*
+Inline
+[filename,DEMOscandate
+ $(vThisfilename),$(vDEMOscandate)];
+
+next i;
+
+if ALT(NoOfRows('TEMP_FilesByDateSorted_0'),-1)<>-1 then
+  left Join (TEMP_FilesByDateSorted_0)
+  Load distinct
+    filename,
+    DEMOscandate
+  RESIDENT TEMP_DEMOdates;
+end if
+
+drop table TEMP_DEMOdates;
+
+//Finally, re-sort the TEMP_FilesByDateSorted_0 by realscandate and filename. 
+//Apparently, doing the left join can reorder the table according to the join-field, which in this case is filename. 
+
+Call CreateSortTable ('TEMP_FilesByDateSorted_0', 'TEMP_FilesByDateSorted', 'realscandate desc');
+
+
+//Now we have the final table created, TEMP_FilesByDateSorted
+Call DropATable ('TEMP_FilesByDateSorted_0');
+
+End Sub; //OrganizeSourceFilesByScanDate
+////////////////////
+////////END SUB ROUTINE 
+////////////////////

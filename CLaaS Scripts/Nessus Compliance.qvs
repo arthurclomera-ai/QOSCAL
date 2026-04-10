@@ -1,0 +1,206 @@
+/********************************************************************
+* QLIK SENSE SCRIPT: NESSUS XML PARSER (ENTERPRISE)
+* Author: Art Clomera
+* Purpose: Recursively load Nessus .nessus XML scan files
+* Output Tables:
+*   - NessusHosts
+*   - NessusVulns
+*   - NessusCompliance
+********************************************************************/
+
+//=== CONFIGURATION ===========================================================
+LET vNessusPath = 'lib://$(vConnection)/$(vCustomer)\SPP4PS\Reports\GRC Reports\';
+//LET vFile = 'lib://$(vConnection)/$(vCustomer)\SPP4PS\Reports\GRC Reports\CDM NGDC-OnPrem NonProd RHEL 7 - 1754378100.nessus';
+LET vSourceFilePattern = '*.nessus';
+LET vSourceFileDateFormat = 'YYYY-MM-DD';
+
+//--- Initialize empty tables for concatenation -------------------------------
+NessusHosts:
+LOAD * INLINE [ HostName, HostStart, HostEnd, FileName ];
+
+NessusVulns:
+LOAD * INLINE [ HostName, pluginID, pluginName, pluginFamily, port, protocol, svc_name, severity, description, solution, risk_factor, plugin_output, FileName ];
+
+NessusCompliance:
+LOAD * INLINE [ HostName, pluginID, ComplianceCheckName, ComplianceResult, ComplianceInfo, FileName ];
+
+//=== PROCESS EACH NESSUS FILE ===============================================
+FOR EACH vFile IN FileList('$(vNessusPath)$(vSourceFilePattern)')
+
+    LET vFileName = SubField(SubField('$(vFile)', '\', -1), '/', -1);
+    TRACE ---------------------- Loading $(vFileName) ----------------------;//---------------------------------------------------------------
+// Step 2: Load HostTable (each ReportHost node)
+//---------------------------------------------------------------
+HostTable:
+LOAD
+    name AS HostName,
+    [@name] AS HostKey       // will link to compliance results
+FROM [$(vFile)]
+(XmlSimple, Table is [NessusClientData_v2/Report/ReportHost]);
+
+//---------------------------------------------------------------
+// Step 3: Extract Host Properties (IP, OS, etc.)
+//---------------------------------------------------------------
+HostPropsRaw:
+LOAD
+    name AS HostKey,
+    [@name] AS PropertyName,
+    value AS PropertyValue
+FROM [$(vFile)]
+(XmlSimple, Table is [NessusClientData_v2/Report/ReportHost/HostProperties/tag]);
+
+// Pivot key host properties we care about
+HostProps:
+LOAD
+    HostKey,
+    MaxString(If(PropertyName='HOST_START', PropertyValue)) AS ScanStart,
+    MaxString(If(PropertyName='HOST_END', PropertyValue)) AS ScanEnd,
+    MaxString(If(PropertyName='host-ip', PropertyValue)) AS HostIP,
+    MaxString(If(PropertyName='operating-system', PropertyValue)) AS HostOS
+RESIDENT HostPropsRaw
+GROUP BY HostKey;
+
+DROP TABLE HostPropsRaw;
+
+//---------------------------------------------------------------
+// Step 4: Load Compliance Plugin Output (Policy Compliance family)
+//---------------------------------------------------------------
+Compliance_PluginOutput:
+LOAD
+    name AS HostKey,
+    [pluginID],
+    [pluginName],
+    [pluginFamily],
+    [severity],
+//     [risk_factor],
+    [description]
+//     [solution],
+//     [see_also],
+//     [synopsis],
+//     [plugin_modification_date],
+//     [plugin_publication_date],
+//     [plugin_type],
+//     [fname],
+//     [plugin_output]
+//     name AS HostKey,                   // parent host node → join key
+//     [pluginID] AS VulnID,
+//     pluginName,
+//     pluginFamily,
+//     severity,
+//     solution & Chr(10) & 'Reference(s): ' & see_also AS Recommendation,
+//     plugin_output
+FROM [$(vFile)]
+(XmlSimple, Table is [NessusClientData_v2/Report/ReportHost/ReportItem])
+WHERE Match(pluginFamily,'Policy Compliance');
+
+//---------------------------------------------------------------
+// Step 5: Join Host info (hostname, IP, OS, scan times)
+//---------------------------------------------------------------
+// --- after you've built HostTable and HostProps ---
+
+// 1) Join just the HostName from HostTable
+LEFT JOIN (Compliance_PluginOutput)
+LOAD
+    HostKey,
+    '$(vFileName)' as FileName,
+    HostName
+RESIDENT HostTable;
+
+// // 2) Join Host IP/OS/Scan times from HostProps (the pivoted props table)
+// LEFT JOIN (Compliance_PluginOutput)
+// LOAD
+//     HostKey,
+//     HostIP
+// //     HostOS,
+// //     ScanStart,
+// //     ScanEnd
+// RESIDENT HostProps;
+
+DROP TABLE HostTable;
+DROP TABLE HostProps;
+
+//---------------------------------------------------------------
+// Step 6: Parse key compliance fields from plugin_output
+//---------------------------------------------------------------
+// Assume your Nessus XML has already been parsed into a table called "Temp_Compliance"
+// and plugin_output is the field containing the long text blocks.
+
+Temp_Compliance:
+LOAD
+    HostKey,
+    [pluginID],
+    [pluginName],
+    [pluginFamily],
+    [severity],
+
+    // Extract the entire block before the Solution section
+    TextBetween([description], '', 'Solution:') AS PreSolutionText,
+
+    // Extract the part before 'Solution:' for parsing
+    TextBetween([description], '', 'Solution:') AS FullHeader,
+
+    // Extract the compliance test (everything before the first colon ':')
+    Trim(SubField(TextBetween([description], '', 'Solution:'), ':', 1)) AS [Compliance Test],
+
+//     // Extract the test result (everything after the first colon)
+//     Trim(SubField(TextBetween([description], '', 'Solution:'), ':', 2)) AS [Test Results],
+    // --- ComplianceResult ---
+    // --- ComplianceResult ---
+    TextBetween([description], '[', ']') AS [ComplianceResult],
+
+    // --- ResultInfo (Everything after ']' but before 'Solution:') ---
+    Trim(
+        PurgeChar(
+            Replace(
+                KeepChar(
+                    TextBetween([description], ']', 'Solution:'),
+                    'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()_+-=[]{};:,.?/<>|`~ ' & Chr(10) & Chr(13)
+                ),
+                Chr(10) & Chr(13),
+                ' '
+            ),
+            '"'
+        )
+    ) AS [ResultInfo],
+    // Continue extracting other sections
+    TextBetween([description], 'Solution:', 'See Also:') AS Solution,
+    TextBetween([description], 'See Also:', 'Reference:') AS SeeAlso,
+    TextBetween([description], 'Reference:', 'Policy Value:') AS Reference,
+    TextBetween([description], 'Policy Value:', 'Actual Value:') AS PolicyValue,
+    // --- NEW: Everything from "Actual Value:" to end of description ---
+    Trim(Mid([description], Index([description], 'Actual Value:') + Len('Actual Value:'))) AS ActualValue
+
+
+RESIDENT Compliance_PluginOutput
+WHERE WildMatch(pluginFamily, 'Policy Compliance');
+
+
+// Compliance_Findings:
+// LOAD
+//     *,
+//     TextBetween(plugin_output, '<cm:compliance-result>', '</cm:compliance-result>') AS ComplianceResult,
+//     TextBetween(plugin_output, '<cm:compliance-actual-value>', '</cm:compliance-actual-value>') AS ActualValue,
+//     TextBetween(plugin_output, '<cm:compliance-audit-file>', '</cm:compliance-audit-file>') AS AuditFile
+// RESIDENT Compliance_PluginOutput;
+
+//---------------------------------------------------------------
+// Step 7: Persist QVD outputs
+//---------------------------------------------------------------
+// STORE Compliance_PluginOutput INTO [lib://$(vConnection)/$(vCustomer)/SPP4PS/QVD/Compliance_PluginOutput.qvd] (qvd);
+CONCATENATE (NessusCompliance)
+    LOAD * RESIDENT Temp_Compliance;
+drop Table Temp_Compliance;
+DROP TABLE Compliance_PluginOutput;
+// ---------------------------------------------------------------------------
+NEXT vFile;
+
+//=== POST PROCESSING =========================================================
+
+
+STORE NessusCompliance INTO [lib://$(vConnection)/$(vCustomer)/SPP4PS/QVD/NessusCompliance.qvd] (qvd);
+
+DROP TABLE NessusCompliance;
+
+//=== END =====================================================================
+TRACE -------------- Nessus XML Load Complete --------------
+

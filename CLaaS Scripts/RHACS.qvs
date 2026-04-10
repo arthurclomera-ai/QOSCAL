@@ -1,0 +1,171 @@
+//***************************************************************************************************************************************************
+// Author: Art Clomera Consultant
+// Date: 11/19/2025
+// Company: Art Clomera Consulting
+// Function: RHACS oad Script for .ckl files within Customer>Project>Reports/Hardening.../ckl/ directory
+// STATUS: "NotAFinding" -> closed, "Open", "Not_Reviewed" -> open, and "not_applicable" -> closed
+//***************************************************************************************************************************************************
+Sub RHACS (vProject)
+//Don't even bother with the rest of this section if there are no RHACS files
+if $(vNumberOfNewRHACSFiles)>0 then
+
+
+let vDataTableName=LOOKUP('QVDTableName','FileType','RHACS','QVDFilesRouter');
+trace ******************* vDataTableName: $(vDataTableName) ******************;
+trace ******************* FileType: $(FileType) ******************;
+trace ******************* QVDFilesRouter: $(QVDFilesRouter) ******************;
+
+let vSourceFileField=LOOKUP('SourceNameField','FileType','RHACS','QVDFilesRouter'); //e.g. 'File_Ckl'
+trace ******************* vSourceFileField: $(vSourceFileField) ******************;
+
+//***************************************************************************************************************************************************
+// Loop through each RHACS file
+//***************************************************************************************************************************************************
+
+trace RHACS;
+
+
+FromBRouter:
+NoConcatenate Load
+Designation,
+SuffixClause
+Resident GlobalFromBStatements
+Where FileType='RHACS';
+ 
+        
+//Build the the FROM statement appropriate for the file source. 
+//FROM statements comprise two parts, desgnated by vFROMA and vFROMB.
+  //vFROMA refers either to the local connection path or the SharePoint connector.  This doesn't change. (As long as all local files sourced in this section are in the same directory.) 
+  //vFROMB comprises the second part of the FROM statement that includes file types, etc.  This can change for each LOAD statement in this section:
+    //Therefore, multiple vFROMB variables are created and numbered sequentially (e.g. vFROMB01, vFROMB02...vFROMBNN)
+//The string 'SuffixClause' here is just a place holder
+if $(vSourceSwitch)=0 then
+//Local source
+  Let vNoOfFiles = '$(vNumberOfNewRHACSFiles)'; 
+
+elseif $(vSourceSwitch)=1 then
+//SharePoint source
+  let vFROMA='lib://$(vConnection)';
+  set vFileList=''$(vRHACSfilenames);
+  let vNoOfFiles=0;
+  for Each file in $(vFileList)     //vFileList already contains filenames as filename.ext
+    if LEN('$(file)')>0 AND LEN(Lookup('$(vSourceFileField)','$(vSourceFileField)','$(file)','$(vDataTableName)_UniqueSource'))=0 then    
+      let vNoOfFiles=$(vNoOfFiles)+1;
+    end if
+  next file
+else
+//Anything else, just to be thorough.
+  let vFROMA='';
+  set vFileList='';
+  let vNextStatement='';
+End if
+
+let vCompletetracker=0;
+
+call OrganizeSourceFilesByScanDate ('$(vRHACSNewSourceFiles)','RHACS','$(vFROMB)','FromBRouter',$(vRHACSBaseDate),$(vRHACSOffsetInt),'$(vRHACSSourceDateFormat)','$(vProject)TEMPRHACSFolderFiles');
+
+let vNumRows=NoOfRows('TEMP_FilesByDateSorted');
+for filerow=0 to $(vNumRows)-1
+  let file         =Peek('filename'    , $(filerow),'TEMP_FilesByDateSorted');
+  let vrealscandate=Peek('realscandate', $(filerow),'TEMP_FilesByDateSorted');
+  let vDEMOscandate=Peek('DEMOscandate', $(filerow),'TEMP_FilesByDateSorted');  
+    if '$(vDemoSwitch)'=0 then
+      let vThisScanDate='$(vrealscandate)';
+    else 
+      let vThisScanDate='$(vDEMOscandate)';
+    end if;     
+if '$(vSourceSwitch)'=0 then
+  call FileNameFromFilePath ('$(file)');   //creates variable vFilenameclean = filename.ext 
+else 
+  let vFilenameclean='$(file)';
+end if //if '$(vSourceSwitch)'=0 then
+
+let vCompletetracker=$(vCompletetracker)+1;
+
+let vIncorpMsg='*********'
+               &chr(10)&'Incorporating file: $(vFilenameclean),'
+               &chr(10)&'$(vCompletetracker)/$(vNoOfFiles) files'
+               &chr(10)&'*********';
+let vCompMsg='*********'
+             &chr(10)&'Completed file: $(vFilenameclean),'
+             &chr(10)&'$(vCompletetracker)/$(vNoOfFiles) files'
+             &chr(10)&'*********';
+
+//Plug the necessary values into the FROM statements, depending on the source
+if $(vSourceSwitch)=0 then
+  set vFROMA=$(file);
+  Call GenerateFROMBs('$(vFROMB)','FromBRouter');                      
+elseif $(vSourceSwitch)=1 then 
+  let vThisURLIS=lookup('URLIS', 'Name', '$(file)', '$(vProject)TEMPRHACSFolderFiles');
+  Call GenerateFROMBs('$(vFROMB)','FromBRouter','$(vThisURLIS)');   
+end if //if $(vSourceSwitch)=0 then
+
+trace $(vIncorpMsg);
+
+//$(vDataTableName)_Temp:
+// build RHACS QVD
+[$(vDataTableName)_Temp]:
+LOAD
+	[cve] as CVE_ID,
+	[CVSS Score],
+	Capitalize([Severity]) as SeverityID,
+	[source] as RHACS_Source,
+	[Component] as Software,
+	[Version],
+	[Fixed Version],
+	[Image Name],
+	[Tag],
+	[Registry],
+	[Image OS] as OS,
+	[First Seen] as [Scan Date],
+	[Created Time],
+	[imageDigest],
+    'Open' as STATUS,    
+    '$(vProject)' & [Component]   as ProgramHostID,
+	[url] as NVD_url
+FROM [$(vFROMA)]
+//$(vFROMB10);
+//  FROM [lib://AttachedFiles/RHACS_Data_fsa_cloud_FY25Q3.csv];
+ (txt, codepage is 28591, embedded labels, delimiter is ',', msq);
+
+//If the main data table has not been created, then rename the Temp table to the main table. Otherwise, concatenate.
+IF ALT(NoOfRows('$(vDataTableName)'),-1)= -1 THEN
+  RENAME TABLE [$(vDataTableName)_Temp] to [$(vDataTableName)];
+ELSE
+  CONCATENATE ([$(vDataTableName)])
+  LOAD * RESIDENT [$(vDataTableName)_Temp];
+  drop table $(vDataTableName)_Temp;
+END IF; 
+
+
+
+trace $(vCompMsg);
+next filerow;
+
+Call DropATable ('TEMP_FilesByDateSorted');
+//***************************************************************************************************************************************************
+//  The if statement below is a check to see if the table from the script below.  
+//	The script above will run regardless, however, if no RHACS files are found, the "RHACS_Temp" table will not be created.
+//***************************************************************************************************************************************************
+
+//If there is an actual data table created AND there were new source files to add, then write the QVD
+
+Call StoreATable ('$(vDataTableName)','lib://$(vStorePathRHACS)','1');
+if NoOfRows('$(vDataTableName)')>0 AND $(vNoOfFiles)>0 THEN //if vConcatenate >0 Then
+//***************************************************************************************************************************************************
+//  concatenate the new files to the QVDs.
+//***************************************************************************************************************************************************
+
+trace RHACS QVD stored: lib://$(vStorePathRHACS);
+else
+//***************************************************************************************************************************************************
+// there are no new files to concatenate.
+//***************************************************************************************************************************************************
+trace No new RHACS File exists for $(vProject);
+end if;  //NoOfRows('$(vDataTableName)')>0 AND $(vNoOfFiles)>0 THEN
+
+Call DropATable ('$(vDataTableName)_UniqueSource');
+Call DropATable ('$(vProject)TEMPRHACSFolderFiles');
+drop table FromBRouter;
+end if //if $(vNumberOfNewRHACSFiles)<>-1 then
+end sub

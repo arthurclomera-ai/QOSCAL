@@ -1,0 +1,114 @@
+//**********************************************************************
+// Author: Art Clomera
+// Function: Extract plugin status (enabled/disabled/mixed) from Nessus 8+ files
+//**********************************************************************
+
+SET vNessusPath = 'lib://Customer Connector/_DATA - ART/SPP4PS/Reports/GRC Reports/Nessus Scans/';
+SET vNessusFolderPattern = '1364.nessus';
+
+TRACE ******************************************************;
+TRACE Starting Nessus Plugin Status Extraction;
+TRACE Directory: $(vNessusPath);
+TRACE ******************************************************;
+
+// Initialize empty table so CONCATENATE will always work
+NessusPluginStatus:
+LOAD
+    '' AS SourceFile,
+    '' AS FamilyName,
+    '' AS Status,
+    '' AS pluginId,
+    '' AS pluginName,
+    '' AS preferenceName,
+    '' AS selectedValue
+AUTOGENERATE(0);
+
+FOR EACH vFile IN FileList('$(vNessusPath)$(vNessusFolderPattern)')
+    TRACE Processing $(vFile);
+
+    // ---- Family-level status ----
+    Nessus_PluginStatus_Family:
+    LOAD
+        '$(vFile)' AS SourceFile,
+        [FamilyName],
+        Status
+    FROM [$(vFile)]
+    (XmlSimple, table is [NessusClientData_v2/Policy/FamilySelection/FamilyItem])
+    WHERE Len(Trim([FamilyName])) > 0
+      AND Len(Trim([Status])) > 0;
+
+    // ---- Plugin preferences ----
+    Nessus_PluginStatus_Preferences:
+    LOAD
+        '$(vFile)' AS SourceFile,
+        [pluginId],
+        fullName,
+        [pluginName],
+        [preferenceName],
+        [selectedValue]
+    FROM [$(vFile)]
+    (XmlSimple, table is [NessusClientData_v2/Policy/Preferences/PluginsPreferences/item])
+    WHERE Len(Trim([pluginId])) > 0
+     and  Match(selectedValue,'yes','no');;
+
+    // ---- Append family data ----
+    TRACE Appending Family Status;
+    CONCATENATE (NessusPluginStatus)
+    LOAD
+        SourceFile,
+        FamilyName,
+        Status
+    RESIDENT Nessus_PluginStatus_Family;
+
+    // ---- Append plugin preferences ----
+    TRACE Appending Plugin Preferences;
+    CONCATENATE (NessusPluginStatus)
+    LOAD
+        SourceFile,
+        pluginId,
+        pluginName,
+        preferenceName,
+        selectedValue
+    RESIDENT Nessus_PluginStatus_Preferences;
+
+//     ---- Cleanup ----
+    DROP TABLE Nessus_PluginStatus_Family;
+    DROP TABLE Nessus_PluginStatus_Preferences;
+
+NEXT vFile
+
+TRACE ******************************************************;
+TRACE Cleaning and storing NessusPluginStatus;
+TRACE ******************************************************;
+
+// ---- Remove null rows ----
+// NessusPluginStatus_Clean:
+// LOAD DISTINCT
+//     SourceFile,
+//     PluginFamily,
+//     PluginStatus,
+//     PluginID,
+//     pluginName,
+//     preferenceName,
+//     PluginSetting
+// RESIDENT NessusPluginStatus
+// WHERE
+//     (Len(Trim(PluginFamily)) > 0 OR Len(Trim(PluginID)) > 0)
+//     AND (Len(Trim(PluginStatus)) > 0 OR Len(Trim(PluginSetting)) > 0);
+
+// DROP TABLE NessusPluginStatus;
+// RENAME TABLE NessusPluginStatus_Clean TO NessusPluginStatus;
+
+// ---- Store ----
+
+  // Special handling for Plugin Status table - only store if it exists
+    if TableNumber(NessusPluginStatus)>=0 then
+      CALL StoreATable('NessusPluginStatus', 'lib://Customer Connector/_DATA - ART/SPP4PS/QVD/', 0);
+      trace 'Stored ' & 'NessusPluginStatus' & ' -> lib://Customer Connector/_DATA - ART/SPP4PS/QVD/' & ' (Plugin Status data found)';
+    else
+      trace 'Skipped storing ' & 'NessusPluginStatus' & ' (no Plugin Status data found or missing path).';
+    end if
+
+TRACE ******************************************************;
+TRACE Nessus Plugin Status Extraction Complete;
+TRACE ******************************************************;
