@@ -1,0 +1,13 @@
+# CLaaS OSCAL POA&M Generator — Python dependencies
+#
+# Install with:
+#   pip install -r requirements.txt
+
+# QVD file reader (Qlik View Data format)
+# Reads the binary .qvd files produced by the CLaaS QVD Generator App
+pyqvd>=2.0.0
+
+# Data manipulation — used internally by pyqvd and the mapper
+pandas>=1.5.0
+
+# Standard library covers everything else (uuid, json, datetime, argparse)
