@@ -57,12 +57,18 @@ Security Tools (Nessus, Burp, Fortify, etc.)
 
 ## Development Environment & Tooling
 
-### Source Control — SensorOps (CM Tool)
+### Source Control — Git (Local) + SensorOps (CM Tool)
 
-- **URL:** `http://cyntinel-dev.ad.cyntinel.net:4040/repositories`
-- SensorOps is the configuration management (CM) tool for CLaaS source artifacts
-- All Qlik scripts, load scripts, OSCAL templates, and configuration files are version-controlled here
-- Treat SensorOps as the source of truth for deployed artifact versions
+**Local git repo:** `k:\Documents\GitHub\QOSCAL`
+- Initialized April 2026; identity set to `Art Clomera <arthur.clomera@gmail.com>` (local only)
+- Contains: `CLaaS Scripts/`, `CLAUDE.md`, and the NIST OSCAL submodule (`OSCAL/`)
+- NIST OSCAL is tracked as a **git submodule** pinned to `v1.2.1` — run `git submodule update --init --recursive` after cloning
+- To update the OSCAL submodule to a newer release: `cd OSCAL && git fetch && git checkout <tag> && cd .. && git add OSCAL && git commit`
+
+**SensorOps (CM Tool):** `http://cyntinel-dev.ad.cyntinel.net:4040/repositories`
+- Authoritative CM tool for deployed CLaaS artifacts on the Qlik Sense server
+- All load scripts, OSCAL templates, and data connection configs that are deployed to the dev/prod server are version-controlled here
+- Treat SensorOps as the source of truth for **deployed** artifact versions
 
 ### Agile / Project Management — Azure DevOps
 
@@ -97,8 +103,8 @@ This is the primary technical focus area. All OSCAL work must conform to the **N
 ### OSCAL Format Standards
 
 - **Preferred serialization:** JSON (for programmatic generation within Qlik); XML as secondary export
-- **OSCAL version:** Track the current stable release; reference `https://pages.nist.gov/OSCAL`
-- **Schema validation:** All generated OSCAL must validate against official NIST OSCAL JSON Schema before delivery
+- **OSCAL version:** Current stable release is `v1.2.1` — cloned locally at `OSCAL/`; reference `https://pages.nist.gov/OSCAL` for spec
+- **Schema validation:** All generated OSCAL must validate against official NIST OSCAL JSON Schema before delivery; local schemas are at `OSCAL/src/metaschema/`
 - **UUID generation:** Every OSCAL object requires a RFC 4122 UUID; generate deterministically where possible to support idempotent re-generation from the same scan data
 
 ### NIST 800-53 Control Mapping
@@ -318,10 +324,14 @@ left join ([$(NessusQVDTable)]) Load * Resident TEMP_ScanDateIPStatus;
 - Never hardcode OSCAL catalog UUIDs; reference the official NIST catalog identifiers
 - All `last-modified` timestamps must be in RFC 3339 format (`YYYY-MM-DDTHH:MM:SSZ`)
 
-### Version Control (SensorOps)
+### Version Control
 
+**Local git (QOSCAL repo):**
 - Commit messages: `[TYPE] Short description` where TYPE is `FEAT`, `FIX`, `REFACTOR`, `DOCS`, `DATA`
 - Branch naming: `feature/short-description`, `fix/issue-number-description`
+
+**SensorOps:**
+- Follow the same commit message convention when checking artifacts into SensorOps
 - Tag releases that correspond to ADO sprint completions
 
 ---
@@ -355,20 +365,13 @@ left join ([$(NessusQVDTable)]) Load * Resident TEMP_ScanDateIPStatus;
 When assisting with CLaaS development, follow these patterns:
 
 ### "Generate OSCAL for a finding"
-Map the finding fields (`FindingID`, `CVE`, `NistControlID`, `Severity`) to the appropriate OSCAL `assessment-results` or `plan-of-action-and-milestones` structure. Use the field naming conventions above. Validate JSON structure against OSCAL schema.
+Map the actual script field names (`VulID`, `CVE`/`CVE_ID`, `Control_Temp`, `SeverityID`, `STATUS`, `CVSS Score`) to the appropriate OSCAL `assessment-results` or `plan-of-action-and-milestones` structure. Use the field naming conventions table above. Validate JSON against the local schemas at `OSCAL/src/metaschema/`.
 
 ### "Write a Qlik load script"
 Follow the `.qvs` standards above. Ask for the source data format, target QVD name, and which fields from the naming convention table are applicable before writing.
 
 ### "Debug a control mapping issue"
 First check the control mapping table in SensorOps for the relevant scanner source. Verify whether the finding has a CVE/CWE, and trace through the mapping chain: scanner ID → CWE/CVE → 800-53 control.
-
-### "Add a new scanner source"
-1. Define the raw schema from the scanner export format
-2. Write a QVD Generator load script section that normalizes to the standard field set
-3. Extend the control mapping table in SensorOps
-4. Update the CLaaS App data model if new fields are introduced
-5. Document the new source in the Azure DevOps Wiki
 
 ### "Generate an SSP section"
 Reference the OSCAL `system-security-plan` schema. Pull system metadata from the CLaaS App data model. Map control implementations from the compliance view data. Output valid OSCAL JSON and note which fields require manual completion by the system owner.
@@ -381,7 +384,7 @@ Reference the OSCAL `system-security-plan` schema. Pull system metadata from the
 5. Verify `vSourceFileField` is set via LOOKUP (not commented out) before it is used
 6. Review the safe-concat pattern around all `_Temp` → main table merges
 
-### "Add a new scanner source" (updated)
+### "Add a new scanner source"
 1. Define the raw schema from the scanner export format
 2. Create a new `Sub ScannerName(vProject)` following the established pattern (see `RHACS.qvs` as the simplest CSV example)
 3. Add a `FileType` row to `QVDFilesRouter`, `GlobalFromBStatements`, `StorePaths`, and `SourceFileRouter`
