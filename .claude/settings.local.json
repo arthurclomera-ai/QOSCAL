@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(wc -l \"/d/Users/aclomera/Documents/GitHub/QOSCAL/CLaaS Scripts\"/*.qvs)"
+      "Bash(wc -l \"/d/Users/aclomera/Documents/GitHub/QOSCAL/CLaaS Scripts\"/*.qvs)",
+      "Bash(git fetch:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)"
     ]
   }
 }
