@@ -4,7 +4,23 @@
       "Bash(wc -l \"/d/Users/aclomera/Documents/GitHub/QOSCAL/CLaaS Scripts\"/*.qvs)",
       "Bash(git fetch:*)",
       "Bash(git add:*)",
-      "Bash(git commit -m ':*)"
+      "Bash(git commit -m ':*)",
+      "Bash(git pull:*)",
+      "Bash(git push:*)",
+      "Bash(git ls-tree:*)",
+      "Bash(pip install:*)",
+      "Bash(pip3 install:*)",
+      "Bash(python3 -m pip install git-filter-repo)",
+      "Bash(python -m pip install git-filter-repo)",
+      "Bash(where python:*)",
+      "Bash(where python3:*)",
+      "Bash(git filter-branch:*)",
+      "Bash(git stash:*)",
+      "Bash(FILTER_BRANCH_SQUELCH_WARNING=1 git filter-branch --force --index-filter \"git rm -rf --cached --ignore-unmatch QVDs/\" --prune-empty --tag-name-filter cat -- --all)",
+      "Bash(xargs -r git update-ref -d)",
+      "Bash(git reflog:*)",
+      "Bash(git gc:*)",
+      "Bash(git update-ref:*)"
     ]
   }
 }

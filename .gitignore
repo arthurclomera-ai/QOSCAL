@@ -1,0 +1,10 @@
+# QVD binary data files — too large for GitHub (can exceed 100 MB)
+QVDs/*.QVD
+*.QVD
+
+# Qlik Sense project/app binaries
+*.qvf
+
+# OS
+Thumbs.db
+.DS_Store
